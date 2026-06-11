@@ -1,0 +1,164 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: iot-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-iotuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iotpass}
+      POSTGRES_DB: ${POSTGRES_DB:-iotdb}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - iot-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-iotuser} -d ${POSTGRES_DB:-iotdb}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mosquitto:
+    profiles: [mqtt]
+    image: eclipse-mosquitto:2
+    container_name: iot-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+    networks:
+      - iot-network
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -t '$$SYS/broker/uptime' -C 1 -W 3 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    profiles: [kafka]
+    image: apache/kafka:3.7.0
+    container_name: iot-kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 4
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    ports:
+      - "9092:9092"
+    networks:
+      - iot-network
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  kafka-init:
+    profiles: [kafka]
+    image: apache/kafka:3.7.0
+    container_name: iot-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - iot-network
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic iot-agriculture-readings --partitions 4 --replication-factor 1
+        echo "Topic iot-agriculture-readings ready"
+
+  data-storage-service:
+    build: ./data-storage-service
+    container_name: iot-data-storage
+    environment:
+      BROKER_TYPE: ${BROKER_TYPE:-mqtt}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-iotuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iotpass}
+      POSTGRES_DB: ${POSTGRES_DB:-iotdb}
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      MQTT_TOPIC: ${MQTT_TOPIC:-iot/agriculture/readings}
+      MQTT_QOS: ${MQTT_QOS:-1}
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-iot-agriculture-readings}
+      KAFKA_GROUP_ID: storage-group
+      BATCH_MODE: ${BATCH_MODE:-false}
+      BATCH_SIZE: ${BATCH_SIZE:-500}
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - iot-network
+    restart: unless-stopped
+
+  analytics-service:
+    build: ./analytics-service
+    container_name: iot-analytics
+    environment:
+      BROKER_TYPE: ${BROKER_TYPE:-mqtt}
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      MQTT_TOPIC: ${MQTT_TOPIC:-iot/agriculture/readings}
+      MQTT_QOS: ${MQTT_QOS:-1}
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-iot-agriculture-readings}
+      KAFKA_GROUP_ID: analytics-group
+      TEMP_ALERT_THRESHOLD: ${TEMP_ALERT_THRESHOLD:-50.0}
+      WINDOW_SIZE_SECONDS: ${WINDOW_SIZE_SECONDS:-10}
+    ports:
+      - "8000:8000"
+    networks:
+      - iot-network
+    restart: unless-stopped
+
+  data-ingestion-service:
+    build: ./data-ingestion-service
+    container_name: iot-data-ingestion
+    environment:
+      BROKER_TYPE: ${BROKER_TYPE:-mqtt}
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      MQTT_TOPIC: ${MQTT_TOPIC:-iot/agriculture/readings}
+      MQTT_QOS: ${MQTT_QOS:-1}
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-iot-agriculture-readings}
+      KAFKA_ACKS: ${KAFKA_ACKS:-1}
+      DEVICE_COUNT: ${DEVICE_COUNT:-100}
+      PUBLISH_INTERVAL_MS: ${PUBLISH_INTERVAL_MS:-100}
+      INJECT_CRITICAL: ${INJECT_CRITICAL:-false}
+      CSV_PATH: /data/BIED_Smart_Agriculture_Dataset.csv
+      ASPNETCORE_URLS: http://+:8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./BIED_Smart_Agriculture_Dataset.csv:/data/BIED_Smart_Agriculture_Dataset.csv:ro
+    networks:
+      - iot-network
+    restart: unless-stopped
+
+networks:
+  iot-network:
+    name: iot-network
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mosquitto_data:
