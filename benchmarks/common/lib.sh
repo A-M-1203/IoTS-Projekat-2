@@ -6,13 +6,60 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
 STATS_PID=""
+STATS_MONITOR_CSV=""
 COMPOSE_PROFILE=""
+
+abs_path() {
+  local path="$1"
+  if [[ "$path" = /* || "$path" =~ ^[A-Za-z]:[/\\] ]]; then
+    echo "$path"
+    return
+  fi
+  echo "$PROJECT_ROOT/$path"
+}
+
+stop_orphan_stats_monitors() {
+  local pid_file pid
+
+  shopt -s nullglob globstar
+  for pid_file in "$PROJECT_ROOT"/results/**/*.monitor.pid; do
+    pid="$(tr -d '[:space:]' <"$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+    rm -f "$pid_file"
+  done
+  shopt -u nullglob globstar
+
+  if command -v pgrep >/dev/null 2>&1; then
+    while read -r pid; do
+      [[ -n "$pid" && "$pid" != "$$" ]] || continue
+      kill "$pid" 2>/dev/null || true
+    done < <(pgrep -f "[b]enchmarks/common/docker_stats.sh" 2>/dev/null || true)
+  fi
+}
 
 export BROKER_TYPE="${BROKER_TYPE:-mqtt}"
 export MQTT_TOPIC="${MQTT_TOPIC:-iot/agriculture/sensors}"
 export KAFKA_TOPIC="${KAFKA_TOPIC:-iot-agriculture-sensors}"
-export BENCHMARK_MESSAGES_PER_DEVICE="${BENCHMARK_MESSAGES_PER_DEVICE:-10}"
+export BENCHMARK_MESSAGES_PER_DEVICE="${BENCHMARK_MESSAGES_PER_DEVICE:-1}"
 export BENCHMARK_PAYLOAD_SIZE="${BENCHMARK_PAYLOAD_SIZE:-384}"
+
+# Wrapper for emqtt_bench exec — MSYS_NO_PATHCONV prevents Git Bash on Windows
+# from rewriting /emqtt_bench/... to C:/Program Files/Git/emqtt_bench/...
+emqtt_bench_exec() {
+  local tty_flag="-T"
+  if [[ "${1:-}" == "-d" ]]; then
+    tty_flag="-d"
+    shift
+  fi
+  MSYS_NO_PATHCONV=1 docker compose --profile mqtt exec "$tty_flag" emqtt-bench /emqtt_bench/bin/emqtt_bench "$@"
+}
+
+log_progress() {
+  echo "[$(date -u +%H:%M:%S)] $*"
+}
 
 timestamp_utc() {
   date -u +%Y%m%d_%H%M%S
@@ -49,12 +96,15 @@ wait_for_healthy() {
     curl -sf http://localhost:8000/health >/dev/null 2>&1 && analytics_ok=1
 
     if [[ "$pg_ok" -eq 1 && "$broker_ok" -eq 1 && "$storage_ok" -eq 1 && "$analytics_ok" -eq 1 ]]; then
-      echo "Stack is healthy."
+      log_progress "Stack is healthy."
       return 0
+    fi
+    if (( i % 5 == 0 )); then
+      log_progress "Waiting for services... attempt ${i}/${attempts}"
     fi
     sleep 2
   done
-  echo "Stack health check timed out" >&2
+  log_progress "ERROR: Stack health check timed out" >&2
   return 1
 }
 
@@ -66,35 +116,48 @@ setup_stack() {
   export BROKER_TYPE="$broker"
   export STORAGE_BATCH_SIZE="$batch_size"
 
-  echo "=== Setting up stack (broker=$broker, STORAGE_BATCH_SIZE=$batch_size) ==="
+  log_progress "Setting up stack (broker=$broker, STORAGE_BATCH_SIZE=$batch_size)"
+  log_progress "Stopping any existing containers..."
   docker compose --profile "$broker" down -v --remove-orphans 2>/dev/null || true
+  log_progress "Starting postgres, data-storage, analytics..."
   docker compose --profile "$broker" up -d --build postgres data-storage analytics
 
   if [[ "$broker" == "mqtt" ]]; then
+    log_progress "Starting mosquitto and emqtt-bench..."
     docker compose --profile mqtt up -d mosquitto emqtt-bench
   else
+    log_progress "Starting kafka broker..."
     docker compose --profile kafka up -d kafka
+    log_progress "Creating Kafka topic if needed..."
     docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-topics.sh \
       --bootstrap-server localhost:9092 \
       --create --if-not-exists --topic "$KAFKA_TOPIC" \
       --partitions 1 --replication-factor 1 || true
   fi
 
+  log_progress "Waiting for all services to become healthy..."
   wait_for_healthy 90
 }
 
 teardown_stack() {
   local broker="${COMPOSE_PROFILE:-mqtt}"
-  echo "=== Tearing down stack ==="
+  log_progress "Tearing down stack..."
   docker compose --profile "$broker" down -v --remove-orphans 2>/dev/null || true
+  log_progress "Stack stopped."
 }
 
 start_stats_monitor() {
   local output_csv="$1"
+  output_csv="$(abs_path "$output_csv")"
   mkdir -p "$(dirname "$output_csv")"
-  bash "$SCRIPT_DIR/docker_stats.sh" "$output_csv" 2 &
+
+  stop_orphan_stats_monitors
+
+  bash "$SCRIPT_DIR/docker_stats.sh" "$output_csv" "$COMPOSE_PROFILE" 2 &
   STATS_PID=$!
-  echo "Started docker stats monitor (pid=$STATS_PID) -> $output_csv"
+  STATS_MONITOR_CSV="$output_csv"
+  echo "$STATS_PID" > "${output_csv}.monitor.pid"
+  log_progress "Started docker stats monitor (pid=$STATS_PID) -> $output_csv"
 }
 
 stop_stats_monitor() {
@@ -102,14 +165,27 @@ stop_stats_monitor() {
     kill "$STATS_PID" 2>/dev/null || true
     wait "$STATS_PID" 2>/dev/null || true
   fi
+
+  if [[ -n "$STATS_MONITOR_CSV" ]]; then
+    rm -f "${STATS_MONITOR_CSV}.monitor.pid"
+  fi
+
   STATS_PID=""
+  STATS_MONITOR_CSV=""
+  stop_orphan_stats_monitors
+  log_progress "Stopped docker stats monitor."
 }
 
 aggregate_resources() {
   local stats_csv="$1"
   local output_json="$2"
+  stats_csv="$(abs_path "$stats_csv")"
+  output_json="$(abs_path "$output_json")"
+  mkdir -p "$(dirname "$output_json")"
   if [[ -f "$stats_csv" ]]; then
+    log_progress "Aggregating container resource metrics from $stats_csv -> $output_json"
     python3 "$SCRIPT_DIR/aggregate_stats.py" "$stats_csv" "$output_json"
+    log_progress "Resource metrics saved to $output_json"
   else
     echo "{}" > "$output_json"
   fi
@@ -138,6 +214,8 @@ wait_for_drain() {
   local stable=0
   local last_count=-1
 
+  log_progress "Waiting for messages to be stored (timeout ${timeout}s)..."
+
   for ((i = 0; i < timeout; i++)); do
     drain_storage_buffer
     local count
@@ -147,17 +225,21 @@ wait_for_drain() {
     if [[ "$count" == "$last_count" ]]; then
       stable=$((stable + 1))
       if [[ "$stable" -ge "$stable_needed" ]]; then
-        echo "Drain complete at count=$count"
+        log_progress "Drain complete — stored count=$count"
         return 0
       fi
     else
       stable=0
       last_count="$count"
     fi
+
+    if (( i > 0 && i % 15 == 0 )); then
+      log_progress "Still draining... stored count=$count (${i}s elapsed)"
+    fi
     sleep 1
   done
 
-  echo "Drain timeout; last count=$last_count" >&2
+  log_progress "WARNING: Drain timeout — last count=$last_count"
 }
 
 write_result_header() {
@@ -192,22 +274,27 @@ resource_field() {
   local json_file="$1"
   local container="$2"
   local field="$3"
-  python3 -c "
-import json, sys
-data = json.load(open('$json_file'))
-entry = data.get('$container', {})
-print(entry.get('$field', 'N/A'))
-" 2>/dev/null || echo "N/A"
+  python3 - "$json_file" "$container" "$field" <<'PY'
+import json
+import sys
+
+json_file, container, field = sys.argv[1:4]
+with open(json_file, encoding="utf-8") as handle:
+    data = json.load(handle)
+entry = data.get(container, {})
+print(entry.get(field, "N/A"))
+PY
 }
 
 format_resource_pair() {
   local json_file="$1"
   local container="$2"
   local metric_prefix="$3"
+  json_file="$(abs_path "$json_file")"
   local avg
   local peak
-  avg="$(resource_field "$json_file" "$container" "avg_${metric_prefix}")"
-  peak="$(resource_field "$json_file" "$container" "peak_${metric_prefix}")"
+  avg="$(resource_field "$json_file" "$container" "avg_${metric_prefix}" 2>/dev/null || echo "N/A")"
+  peak="$(resource_field "$json_file" "$container" "peak_${metric_prefix}" 2>/dev/null || echo "N/A")"
   echo "${avg}/${peak}"
 }
 

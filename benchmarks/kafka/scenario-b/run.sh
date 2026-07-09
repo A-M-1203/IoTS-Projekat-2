@@ -13,53 +13,62 @@ RESULT_RESOURCES="results/scenario-b/kafka/outage_30s_${TS}_resources.json"
 PAYLOAD_FILE="$SCRIPT_DIR/../../common/payloads/sensor.json"
 NETWORK="$(get_compose_network)"
 OUTAGE_SECONDS=30
+DEVICES=50
 
-echo "=== Scenario B Kafka: network disconnect 30s ==="
+log_progress "=== Scenario B Kafka: network disconnect ${OUTAGE_SECONDS}s ==="
 
 setup_stack kafka 1
+log_progress "Copying benchmark payload to Kafka container..."
 docker compose --profile kafka cp "$PAYLOAD_FILE" kafka:/tmp/bench_payload.json
 
 start_stats_monitor "$RESULT_STATS"
 
-# Background producer
+log_progress "Starting background low-rate producer..."
 docker compose --profile kafka exec -d kafka bash -c "
 while true; do
   /opt/kafka/bin/kafka-producer-perf-test.sh \
     --topic $KAFKA_TOPIC \
-    --num-records 50 \
+    --num-records $((DEVICES * BENCHMARK_MESSAGES_PER_DEVICE)) \
     --record-size $BENCHMARK_PAYLOAD_SIZE \
-    --throughput 50 \
+    --throughput $DEVICES \
     --payload-file /tmp/bench_payload.json \
     --producer-props acks=1 bootstrap.servers=localhost:9092 \
-    --num-threads 5 >/dev/null 2>&1
+    --num-threads $DEVICES >/dev/null 2>&1
   sleep 1
 done
 " || true
 
+log_progress "Baseline phase — waiting 20s before network outage..."
 sleep 20
 OFFSET_BEFORE=$(docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
   --bootstrap-server localhost:9092 --describe --group data-storage-group 2>/dev/null | awk 'NR>1 {print $4}' | tail -1)
 OFFSET_BEFORE="${OFFSET_BEFORE:-0}"
 
 BENCH_CONTAINER="$(get_container_name kafka)"
+log_progress "Disconnecting $BENCH_CONTAINER from $NETWORK..."
 docker network disconnect "$NETWORK" "$BENCH_CONTAINER" || true
-echo "Disconnected $BENCH_CONTAINER from $NETWORK"
+log_progress "Network outage in progress (${OUTAGE_SECONDS}s)..."
 sleep "$OUTAGE_SECONDS"
+log_progress "Reconnecting $BENCH_CONTAINER to $NETWORK..."
 docker network connect "$NETWORK" "$BENCH_CONTAINER" || true
-echo "Reconnected $BENCH_CONTAINER"
 
 RECOVERY_START=$(date +%s)
 RECOVERY_SECONDS=""
+log_progress "Measuring recovery time (consumer lag)..."
 for ((i = 0; i < 120; i++)); do
   LAG="$(get_kafka_consumer_lag data-storage-group)"
   if [[ "${LAG:-999}" -le 5 ]]; then
     RECOVERY_SECONDS=$(( $(date +%s) - RECOVERY_START ))
     break
   fi
+  if (( i > 0 && i % 15 == 0 )); then
+    log_progress "Still waiting for recovery... lag=$LAG (${i}s)"
+  fi
   sleep 1
 done
 [[ -z "$RECOVERY_SECONDS" ]] && RECOVERY_SECONDS="120+"
 
+log_progress "Collecting post-recovery offset (10s)..."
 sleep 10
 OFFSET_AFTER=$(docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
   --bootstrap-server localhost:9092 --describe --group data-storage-group 2>/dev/null | awk 'NR>1 {print $4}' | tail -1)
@@ -74,6 +83,7 @@ STORAGE_CONTAINER="$(get_container_name data-storage)"
 ANALYTICS_CONTAINER="$(get_container_name analytics)"
 POSTGRES_CONTAINER="$(get_container_name postgres)"
 
+log_progress "Writing results to $RESULT_TXT"
 write_result_header "$RESULT_TXT"
 append_result "$RESULT_TXT" "scenario" "B"
 append_result "$RESULT_TXT" "broker" "kafka"
@@ -88,5 +98,5 @@ append_summary_csv "b" "kafka" \
   "outage_s,recovery_s,offset_before,offset_after,lag_after,broker_cpu,broker_ram,broker_net,storage_cpu,storage_ram,storage_net,analytics_cpu,analytics_ram,analytics_net,postgres_cpu,postgres_ram,postgres_net,note" \
   "${OUTAGE_SECONDS},${RECOVERY_SECONDS},${OFFSET_BEFORE},${OFFSET_AFTER},${LAG_AFTER},$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" net_mb),kafka_disconnect_broker"
 
-echo "=== Scenario B Kafka done: recovery=${RECOVERY_SECONDS}s offset ${OFFSET_BEFORE}->${OFFSET_AFTER} ==="
+log_progress "=== Scenario B Kafka done: recovery=${RECOVERY_SECONDS}s offset ${OFFSET_BEFORE}->${OFFSET_AFTER} ==="
 teardown_stack

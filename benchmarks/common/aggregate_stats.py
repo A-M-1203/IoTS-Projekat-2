@@ -6,6 +6,19 @@ import json
 import sys
 from collections import defaultdict
 
+BENCHMARK_SERVICES = (
+    "mosquitto",
+    "emqtt-bench",
+    "kafka",
+    "data-storage",
+    "analytics",
+    "postgres",
+)
+
+
+def is_benchmark_container(name: str) -> bool:
+    return any(f"-{service}-" in name for service in BENCHMARK_SERVICES)
+
 
 def parse_mem_mb(value: str) -> float:
     value = value.strip().split("/")[0].strip()
@@ -53,7 +66,7 @@ def aggregate(input_csv: str, output_json: str) -> None:
         reader = csv.DictReader(handle)
         for row in reader:
             name = row.get("container", row.get("name", "")).strip()
-            if not name:
+            if not name or not is_benchmark_container(name):
                 continue
             buckets[name]["cpu"].append(parse_cpu(row.get("cpu_percent", "0")))
             buckets[name]["ram_mb"].append(parse_mem_mb(row.get("mem_used", "0")))

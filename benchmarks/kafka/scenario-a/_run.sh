@@ -19,10 +19,11 @@ PAYLOAD_FILE="$SCRIPT_DIR/../../common/payloads/sensor.json"
 MESSAGES_PER_DEVICE="${BENCHMARK_MESSAGES_PER_DEVICE}"
 SENT=$((CLIENTS * MESSAGES_PER_DEVICE))
 
-echo "=== Scenario A Kafka: clients=$CLIENTS acks=$ACKS sent=$SENT ==="
+log_progress "=== Scenario A Kafka: clients=$CLIENTS acks=$ACKS sent=$SENT ==="
 
 setup_stack kafka 500
 
+log_progress "Copying benchmark payload to Kafka container..."
 docker compose --profile kafka cp "$PAYLOAD_FILE" kafka:/tmp/bench_payload.json
 docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server localhost:9092 \
@@ -32,6 +33,7 @@ docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-topics.sh \
 start_stats_monitor "$RESULT_STATS"
 START_TS=$(date +%s)
 
+log_progress "Publishing $SENT messages via kafka-producer-perf-test (this may take a while)..."
 BENCH_OUTPUT=$(docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-producer-perf-test.sh \
   --topic "$KAFKA_TOPIC" \
   --num-records "$SENT" \
@@ -41,8 +43,10 @@ BENCH_OUTPUT=$(docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka
   --producer-props "acks=${ACKS} bootstrap.servers=localhost:9092" \
   --num-threads "$CLIENTS" 2>&1) || true
 
+log_progress "Load generation finished."
 echo "$BENCH_OUTPUT"
 
+log_progress "Calculating received count and loss..."
 wait_for_drain 180
 END_TS=$(date +%s)
 DURATION=$((END_TS - START_TS))
@@ -58,6 +62,7 @@ fi
 
 LOSS="$(calc_loss_pct "$SENT" "$RECEIVED")"
 
+log_progress "Writing results to $RESULT_TXT"
 stop_stats_monitor
 aggregate_resources "$RESULT_STATS" "$RESULT_RESOURCES"
 
@@ -81,5 +86,5 @@ append_summary_csv "a" "kafka" \
   "devices,acks,sent,received,lost_percent,duration_s,broker_cpu,broker_ram,broker_net,storage_cpu,storage_ram,storage_net,analytics_cpu,analytics_ram,analytics_net,postgres_cpu,postgres_ram,postgres_net" \
   "${CLIENTS},${ACKS},${SENT},${RECEIVED},${LOSS},${DURATION},$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" net_mb)"
 
-echo "=== Done: sent=$SENT received=$RECEIVED lost=${LOSS}% duration=${DURATION}s ==="
+log_progress "=== Done: sent=$SENT received=$RECEIVED lost=${LOSS}% duration=${DURATION}s ==="
 teardown_stack

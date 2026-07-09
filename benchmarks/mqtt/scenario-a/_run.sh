@@ -18,13 +18,14 @@ RESULT_RESOURCES="results/scenario-a/mqtt/${CONFIG}_${TS}_resources.json"
 MESSAGES_PER_DEVICE="${BENCHMARK_MESSAGES_PER_DEVICE}"
 SENT=$((CLIENTS * MESSAGES_PER_DEVICE))
 
-echo "=== Scenario A MQTT: clients=$CLIENTS qos=$QOS sent=$SENT ==="
+log_progress "=== Scenario A MQTT: clients=$CLIENTS qos=$QOS sent=$SENT ==="
 
 setup_stack mqtt 500
 start_stats_monitor "$RESULT_STATS"
 START_TS=$(date +%s)
 
-BENCH_OUTPUT=$(docker compose --profile mqtt exec -T emqtt-bench emqtt_bench pub \
+log_progress "Publishing $SENT messages via emqtt-bench (this may take a while)..."
+BENCH_OUTPUT=$(emqtt_bench_exec pub \
   -h mosquitto -p 1883 \
   -c "$CLIENTS" -q "$QOS" \
   -t "$MQTT_TOPIC" \
@@ -32,8 +33,10 @@ BENCH_OUTPUT=$(docker compose --profile mqtt exec -T emqtt-bench emqtt_bench pub
   -n "$MESSAGES_PER_DEVICE" \
   -m "$SENSOR_PAYLOAD" 2>&1) || true
 
+log_progress "Load generation finished."
 echo "$BENCH_OUTPUT"
 
+log_progress "Calculating received count and loss..."
 wait_for_drain 180
 END_TS=$(date +%s)
 DURATION=$((END_TS - START_TS))
@@ -49,6 +52,7 @@ fi
 
 LOSS="$(calc_loss_pct "$SENT" "$RECEIVED")"
 
+log_progress "Writing results to $RESULT_TXT"
 stop_stats_monitor
 aggregate_resources "$RESULT_STATS" "$RESULT_RESOURCES"
 
@@ -72,5 +76,5 @@ append_summary_csv "a" "mqtt" \
   "devices,qos,sent,received,lost_percent,duration_s,broker_cpu,broker_ram,broker_net,storage_cpu,storage_ram,storage_net,analytics_cpu,analytics_ram,analytics_net,postgres_cpu,postgres_ram,postgres_net" \
   "${CLIENTS},${QOS},${SENT},${RECEIVED},${LOSS},${DURATION},$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" net_mb)"
 
-echo "=== Done: sent=$SENT received=$RECEIVED lost=${LOSS}% duration=${DURATION}s ==="
+log_progress "=== Done: sent=$SENT received=$RECEIVED lost=${LOSS}% duration=${DURATION}s ==="
 teardown_stack

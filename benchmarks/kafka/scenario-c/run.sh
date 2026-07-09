@@ -12,36 +12,41 @@ RESULT_STATS="results/scenario-c/kafka/burst_${TS}_stats.csv"
 RESULT_RESOURCES="results/scenario-c/kafka/burst_${TS}_resources.json"
 PAYLOAD_FILE="$SCRIPT_DIR/../../common/payloads/sensor.json"
 
-BASELINE_RATE=50
-BURST_RATE=5000
+BASELINE_DEVICES=50
+BURST_DEVICES=200
 BURST_SECONDS=10
 PEAK_LAG=0
 STABLE=0
 
-echo "=== Scenario C Kafka: burst ${BASELINE_RATE} -> ${BURST_RATE} msg/s ==="
+log_progress "=== Scenario C Kafka: burst ${BASELINE_DEVICES} -> ${BURST_DEVICES} devices (1 msg each) ==="
 
 setup_stack kafka 500
+log_progress "Copying benchmark payload to Kafka container..."
 docker compose --profile kafka cp "$PAYLOAD_FILE" kafka:/tmp/bench_payload.json
 start_stats_monitor "$RESULT_STATS"
 
-# Baseline
+log_progress "Phase 1/3: Baseline load (${BASELINE_DEVICES} devices)..."
 docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-producer-perf-test.sh \
-  --topic "$KAFKA_TOPIC" --num-records 1500 --record-size "$BENCHMARK_PAYLOAD_SIZE" \
-  --throughput "$BASELINE_RATE" --payload-file /tmp/bench_payload.json \
-  --producer-props acks=1 bootstrap.servers=localhost:9092 --num-threads 10 || true
+  --topic "$KAFKA_TOPIC" --num-records $((BASELINE_DEVICES * BENCHMARK_MESSAGES_PER_DEVICE)) \
+  --record-size "$BENCHMARK_PAYLOAD_SIZE" \
+  --throughput "$BASELINE_DEVICES" --payload-file /tmp/bench_payload.json \
+  --producer-props acks=1 bootstrap.servers=localhost:9092 --num-threads "$BASELINE_DEVICES" || true
 
 for ((i = 0; i < 30; i++)); do
   LAG="$(get_kafka_consumer_lag data-storage-group)"
   [[ "$LAG" -gt "$PEAK_LAG" ]] && PEAK_LAG="$LAG"
+  if (( i > 0 && i % 10 == 0 )); then
+    log_progress "Baseline monitoring... lag=$LAG (${i}/30s)"
+  fi
   sleep 1
 done
 
-# Burst
+log_progress "Phase 2/3: Burst load (${BURST_DEVICES} devices)..."
 docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-producer-perf-test.sh \
-  --topic "$KAFKA_TOPIC" --num-records $((BURST_RATE * BURST_SECONDS)) \
-  --record-size "$BENCHMARK_PAYLOAD_SIZE" --throughput "$BURST_RATE" \
+  --topic "$KAFKA_TOPIC" --num-records $((BURST_DEVICES * BENCHMARK_MESSAGES_PER_DEVICE)) \
+  --record-size "$BENCHMARK_PAYLOAD_SIZE" --throughput "$BURST_DEVICES" \
   --payload-file /tmp/bench_payload.json \
-  --producer-props acks=1 bootstrap.servers=localhost:9092 --num-threads 50 || true
+  --producer-props acks=1 bootstrap.servers=localhost:9092 --num-threads "$BURST_DEVICES" || true
 
 for ((i = 0; i < BURST_SECONDS; i++)); do
   LAG="$(get_kafka_consumer_lag data-storage-group)"
@@ -49,6 +54,7 @@ for ((i = 0; i < BURST_SECONDS; i++)); do
   sleep 1
 done
 
+log_progress "Phase 3/3: Waiting for recovery (lag drain)..."
 RECOVERY_SECONDS=""
 for ((i = 0; i < 180; i++)); do
   LAG="$(get_kafka_consumer_lag data-storage-group)"
@@ -57,6 +63,9 @@ for ((i = 0; i < 180; i++)); do
     [[ "$STABLE" -ge 30 ]] && RECOVERY_SECONDS=$((i + 1)) && break
   else
     STABLE=0
+  fi
+  if (( i > 0 && i % 30 == 0 )); then
+    log_progress "Recovery in progress... lag=$LAG (${i}s elapsed)"
   fi
   sleep 1
 done
@@ -74,15 +83,15 @@ POSTGRES_CONTAINER="$(get_container_name postgres)"
 write_result_header "$RESULT_TXT"
 append_result "$RESULT_TXT" "scenario" "C"
 append_result "$RESULT_TXT" "broker" "kafka"
-append_result "$RESULT_TXT" "baseline_msg_per_s" "$BASELINE_RATE"
-append_result "$RESULT_TXT" "burst_msg_per_s" "$BURST_RATE"
+append_result "$RESULT_TXT" "baseline_devices" "$BASELINE_DEVICES"
+append_result "$RESULT_TXT" "burst_devices" "$BURST_DEVICES"
 append_result "$RESULT_TXT" "peak_lag" "$PEAK_LAG"
 append_result "$RESULT_TXT" "recovery_time_seconds" "$RECOVERY_SECONDS"
 append_result "$RESULT_TXT" "resources_json" "$RESULT_RESOURCES"
 
 append_summary_csv "c" "kafka" \
   "baseline,burst,peak_lag,recovery_s,broker_cpu,broker_ram,broker_net,storage_cpu,storage_ram,storage_net,analytics_cpu,analytics_ram,analytics_net,postgres_cpu,postgres_ram,postgres_net" \
-  "${BASELINE_RATE},${BURST_RATE},${PEAK_LAG},${RECOVERY_SECONDS},$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" net_mb)"
+  "${BASELINE_DEVICES},${BURST_DEVICES},${PEAK_LAG},${RECOVERY_SECONDS},$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" net_mb)"
 
-echo "=== Scenario C Kafka done: peak_lag=$PEAK_LAG recovery=${RECOVERY_SECONDS}s ==="
+log_progress "=== Scenario C Kafka done: peak_lag=$PEAK_LAG recovery=${RECOVERY_SECONDS}s ==="
 teardown_stack

@@ -13,7 +13,7 @@ RESULT_RESOURCES="results/scenario-b/mqtt/outage_30s_${TS}_resources.json"
 NETWORK="$(get_compose_network)"
 OUTAGE_SECONDS=30
 
-echo "=== Scenario B MQTT: network disconnect 30s ==="
+log_progress "=== Scenario B MQTT: network disconnect ${OUTAGE_SECONDS}s ==="
 
 setup_stack mqtt 1
 start_stats_monitor "$RESULT_STATS"
@@ -21,34 +21,41 @@ start_stats_monitor "$RESULT_STATS"
 BENCH_CONTAINER="$(get_container_name emqtt-bench)"
 STORAGE_CONTAINER="$(get_container_name data-storage)"
 
-# Start background low-rate load
-docker compose --profile mqtt exec -d emqtt-bench emqtt_bench pub \
+log_progress "Starting background low-rate load (50 devices)..."
+emqtt_bench_exec -d pub \
   -h mosquitto -p 1883 -c 50 -q 1 -t "$MQTT_TOPIC" \
-  -s "$BENCHMARK_PAYLOAD_SIZE" -n 1000 -I 1000 -m "$SENSOR_PAYLOAD" || true
+  -s "$BENCHMARK_PAYLOAD_SIZE" -n "$BENCHMARK_MESSAGES_PER_DEVICE" -I 1000 -m "$SENSOR_PAYLOAD" || true
 
+log_progress "Baseline phase — waiting 30s before network outage..."
 sleep 30
 COUNT_BEFORE="$(get_received_count)"
 COUNT_BEFORE="${COUNT_BEFORE:-0}"
 
 DISCONNECT_TS=$(date +%s)
+log_progress "Disconnecting $BENCH_CONTAINER from $NETWORK..."
 docker network disconnect "$NETWORK" "$BENCH_CONTAINER" || true
-echo "Disconnected $BENCH_CONTAINER from $NETWORK at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+log_progress "Network outage in progress (${OUTAGE_SECONDS}s)..."
 sleep "$OUTAGE_SECONDS"
 CONNECT_TS=$(date +%s)
+log_progress "Reconnecting $BENCH_CONTAINER to $NETWORK..."
 docker network connect "$NETWORK" "$BENCH_CONTAINER" || true
-echo "Reconnected $BENCH_CONTAINER at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 RECOVERY_START=$(date +%s)
 RECOVERY_SECONDS=""
+log_progress "Measuring recovery time (resubscribe)..."
 for ((i = 0; i < 120; i++)); do
   if docker compose --profile mqtt logs --since 2m data-storage 2>/dev/null | grep -q "SUBSCRIBED at"; then
     RECOVERY_SECONDS=$(( $(date +%s) - CONNECT_TS ))
     break
   fi
+  if (( i > 0 && i % 15 == 0 )); then
+    log_progress "Still waiting for recovery... (${i}s)"
+  fi
   sleep 1
 done
 [[ -z "$RECOVERY_SECONDS" ]] && RECOVERY_SECONDS="120+"
 
+log_progress "Collecting post-recovery metrics (20s)..."
 sleep 20
 COUNT_AFTER="$(get_received_count)"
 COUNT_AFTER="${COUNT_AFTER:-0}"
@@ -61,6 +68,7 @@ BROKER_CONTAINER="$(get_container_name mosquitto)"
 ANALYTICS_CONTAINER="$(get_container_name analytics)"
 POSTGRES_CONTAINER="$(get_container_name postgres)"
 
+log_progress "Writing results to $RESULT_TXT"
 write_result_header "$RESULT_TXT"
 append_result "$RESULT_TXT" "scenario" "B"
 append_result "$RESULT_TXT" "broker" "mqtt"
@@ -74,5 +82,5 @@ append_summary_csv "b" "mqtt" \
   "outage_s,recovery_s,messages,resubscribe_s,broker_cpu,broker_ram,broker_net,storage_cpu,storage_ram,storage_net,analytics_cpu,analytics_ram,analytics_net,postgres_cpu,postgres_ram,postgres_net,note" \
   "${OUTAGE_SECONDS},${RECOVERY_SECONDS},${MESSAGES_DURING},${RECOVERY_SECONDS},$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$STORAGE_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$POSTGRES_CONTAINER" net_mb),mqtt_disconnect_emqtt_bench"
 
-echo "=== Scenario B MQTT done: recovery=${RECOVERY_SECONDS}s ==="
+log_progress "=== Scenario B MQTT done: recovery=${RECOVERY_SECONDS}s ==="
 teardown_stack

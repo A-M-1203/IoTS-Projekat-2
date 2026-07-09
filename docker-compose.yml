@@ -54,6 +54,8 @@ services:
     profiles: [mqtt]
     image: emqx/emqtt-bench:latest
     networks: [iot-net]
+    environment:
+      PATH: /emqtt_bench/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     entrypoint: ["sleep", "infinity"]
     depends_on:
       mosquitto:

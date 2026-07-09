@@ -12,7 +12,7 @@ RESULT_STATS="results/scenario-d/mqtt/alerting_${TS}_stats.csv"
 RESULT_RESOURCES="results/scenario-d/mqtt/alerting_${TS}_resources.json"
 RUNS=10
 
-echo "=== Scenario D MQTT: E2E alerting latency ($RUNS runs) ==="
+log_progress "=== Scenario D MQTT: E2E alerting latency ($RUNS runs) ==="
 
 export BENCHMARK_INSTANT_ALERT=true
 export BENCHMARK_ALERT_THRESHOLD=40
@@ -26,6 +26,7 @@ LATENCIES_FILE="$(mktemp)"
 trap 'rm -f "$LATENCIES_FILE"' EXIT
 
 for ((run = 1; run <= RUNS; run++)); do
+  log_progress "Alert test run $run/$RUNS..."
   PUBLISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
   PAYLOAD=$(python3 - "$SCRIPT_DIR/../../common/payloads/critical_sensor.json" "$PUBLISHED_AT" "$run" <<'PY'
 import json, sys
@@ -40,12 +41,13 @@ print(json.dumps(payload))
 PY
 )
 
-  docker compose --profile mqtt exec -T emqtt-bench emqtt_bench pub \
+  emqtt_bench_exec pub \
     -h mosquitto -p 1883 -c 1 -q 1 -t "$MQTT_TOPIC" \
-    -s "$BENCHMARK_PAYLOAD_SIZE" -n 1 -m "$PAYLOAD" >/dev/null 2>&1 || true
+    -s "$BENCHMARK_PAYLOAD_SIZE" -n "$BENCHMARK_MESSAGES_PER_DEVICE" -m "$PAYLOAD" >/dev/null 2>&1 || true
 
   sleep 2
   LATENCY=$(curl -sf http://localhost:8000/metrics 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('last_e2e_latency_ms',0))" || echo "0")
+  log_progress "  run $run: e2e_latency_ms=$LATENCY"
   echo "run=$run published_at=$PUBLISHED_AT e2e_latency_ms=$LATENCY" >> "$RESULT_TXT"
   echo "$LATENCY" >> "$LATENCIES_FILE"
   sleep 1
@@ -79,5 +81,5 @@ append_summary_csv "d" "mqtt" \
   "run,published_at,alert_at,e2e_ms,broker_cpu,broker_ram,broker_net,analytics_cpu,analytics_ram,analytics_net" \
   "avg/p95,,,${AVG_LAT}/${P95_LAT},$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" net_mb)"
 
-echo "=== Scenario D MQTT done: avg=${AVG_LAT}ms p95=${P95_LAT}ms ==="
+log_progress "=== Scenario D MQTT done: avg=${AVG_LAT}ms p95=${P95_LAT}ms ==="
 teardown_stack

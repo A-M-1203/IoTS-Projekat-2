@@ -13,7 +13,7 @@ RESULT_RESOURCES="results/scenario-d/kafka/alerting_${TS}_resources.json"
 PAYLOAD_TEMPLATE="$SCRIPT_DIR/../../common/payloads/critical_sensor.json"
 RUNS=10
 
-echo "=== Scenario D Kafka: E2E alerting latency ($RUNS runs) ==="
+log_progress "=== Scenario D Kafka: E2E alerting latency ($RUNS runs) ==="
 
 export BENCHMARK_INSTANT_ALERT=true
 export BENCHMARK_ALERT_THRESHOLD=40
@@ -27,6 +27,7 @@ LATENCIES_FILE="$(mktemp)"
 trap 'rm -f "$LATENCIES_FILE"' EXIT
 
 for ((run = 1; run <= RUNS; run++)); do
+  log_progress "Alert test run $run/$RUNS..."
   PUBLISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
   PAYLOAD=$(python3 - "$PAYLOAD_TEMPLATE" "$PUBLISHED_AT" "$run" <<'PY'
 import json, sys
@@ -48,6 +49,7 @@ PY
 
   sleep 2
   LATENCY=$(curl -sf http://localhost:8000/metrics 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('last_e2e_latency_ms',0))" || echo "0")
+  log_progress "  run $run: e2e_latency_ms=$LATENCY"
   echo "run=$run published_at=$PUBLISHED_AT e2e_latency_ms=$LATENCY" >> "$RESULT_TXT"
   echo "$LATENCY" >> "$LATENCIES_FILE"
   sleep 1
@@ -81,5 +83,5 @@ append_summary_csv "d" "kafka" \
   "run,published_at,alert_at,e2e_ms,broker_cpu,broker_ram,broker_net,analytics_cpu,analytics_ram,analytics_net" \
   "avg/p95,,,${AVG_LAT}/${P95_LAT},$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$BROKER_CONTAINER" net_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" cpu),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" ram_mb),$(format_resource_pair "$RESULT_RESOURCES" "$ANALYTICS_CONTAINER" net_mb)"
 
-echo "=== Scenario D Kafka done: avg=${AVG_LAT}ms p95=${P95_LAT}ms ==="
+log_progress "=== Scenario D Kafka done: avg=${AVG_LAT}ms p95=${P95_LAT}ms ==="
 teardown_stack
