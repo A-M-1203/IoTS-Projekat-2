@@ -11,6 +11,8 @@ class Settings:
     kafka_group_id: str = os.getenv("KAFKA_GROUP_ID", "analytics-group")
     temp_alert_threshold: float = float(os.getenv("TEMP_ALERT_THRESHOLD", "50"))
     window_size_seconds: int = int(os.getenv("WINDOW_SIZE_SECONDS", "10"))
+    benchmark_instant_alert: bool = os.getenv("BENCHMARK_INSTANT_ALERT", "false").lower() == "true"
+    benchmark_alert_threshold: float = float(os.getenv("BENCHMARK_ALERT_THRESHOLD", "40"))
 
 
 settings = Settings()

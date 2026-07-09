@@ -2,10 +2,12 @@ const config = require('./config');
 const { waitForDatabase } = require('./db');
 const { startMqttSubscriber } = require('./subscribers/mqttSubscriber');
 const { startKafkaSubscriber } = require('./subscribers/kafkaSubscriber');
+const { startMetricsServer } = require('./metricsServer');
 
 async function main() {
-  console.log(`Data Storage starting with broker: ${config.brokerType}`);
+  console.log(`Data Storage starting with broker: ${config.brokerType}, batch size: ${config.batchSize}`);
   await waitForDatabase();
+  startMetricsServer();
 
   if (config.brokerType === 'kafka') {
     await startKafkaSubscriber();

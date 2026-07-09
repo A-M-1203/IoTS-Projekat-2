@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    networks: [iot-net]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-iot_agriculture}
       POSTGRES_USER: ${POSTGRES_USER:-iot}
@@ -18,6 +19,7 @@ services:
   mosquitto:
     profiles: [mqtt]
     image: eclipse-mosquitto:2
+    networks: [iot-net]
     volumes:
       - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
     healthcheck:
@@ -29,6 +31,7 @@ services:
   kafka:
     profiles: [kafka]
     image: apache/kafka:3.9.0
+    networks: [iot-net]
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -47,8 +50,19 @@ services:
       timeout: 10s
       retries: 10
 
+  emqtt-bench:
+    profiles: [mqtt]
+    image: emqx/emqtt-bench:latest
+    networks: [iot-net]
+    entrypoint: ["sleep", "infinity"]
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
   data-ingestion:
+    profiles: [ingestion]
     build: ./services/data-ingestion
+    networks: [iot-net]
     environment:
       BROKER_TYPE: ${BROKER_TYPE:-mqtt}
       MQTT_HOST: ${MQTT_HOST:-mosquitto}
@@ -74,18 +88,25 @@ services:
 
   data-storage:
     build: ./services/data-storage
+    networks: [iot-net]
+    ports:
+      - "3000:3000"
     environment:
       BROKER_TYPE: ${BROKER_TYPE:-mqtt}
       MQTT_HOST: ${MQTT_HOST:-mosquitto}
       MQTT_PORT: ${MQTT_PORT:-1883}
       MQTT_TOPIC: ${MQTT_TOPIC:-iot/agriculture/sensors}
+      MQTT_SUBSCRIBE_QOS: ${MQTT_SUBSCRIBE_QOS:-2}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
       KAFKA_TOPIC: ${KAFKA_TOPIC:-iot-agriculture-sensors}
+      KAFKA_GROUP_ID: ${KAFKA_GROUP_ID:-data-storage-group}
       POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
       POSTGRES_DB: ${POSTGRES_DB:-iot_agriculture}
       POSTGRES_USER: ${POSTGRES_USER:-iot}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iot}
+      STORAGE_BATCH_SIZE: ${STORAGE_BATCH_SIZE:-1}
+      METRICS_PORT: ${STORAGE_METRICS_PORT:-3000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -99,6 +120,7 @@ services:
 
   analytics:
     build: ./services/analytics
+    networks: [iot-net]
     ports:
       - "8000:8000"
     environment:
@@ -108,8 +130,11 @@ services:
       MQTT_TOPIC: ${MQTT_TOPIC:-iot/agriculture/sensors}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
       KAFKA_TOPIC: ${KAFKA_TOPIC:-iot-agriculture-sensors}
+      KAFKA_GROUP_ID: ${KAFKA_GROUP_ID:-analytics-group}
       TEMP_ALERT_THRESHOLD: ${TEMP_ALERT_THRESHOLD:-50}
       WINDOW_SIZE_SECONDS: ${WINDOW_SIZE_SECONDS:-10}
+      BENCHMARK_INSTANT_ALERT: ${BENCHMARK_INSTANT_ALERT:-false}
+      BENCHMARK_ALERT_THRESHOLD: ${BENCHMARK_ALERT_THRESHOLD:-40}
     depends_on:
       mosquitto:
         condition: service_healthy
@@ -118,3 +143,8 @@ services:
         condition: service_healthy
         required: false
     restart: on-failure
+
+networks:
+  iot-net:
+    name: iot-net
+    driver: bridge

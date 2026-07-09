@@ -6,7 +6,7 @@ import time
 from confluent_kafka import Consumer, KafkaException
 
 from app.config import settings
-from app.window_processor import window_processor
+from app.message_handler import process_reading
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,8 @@ def start_kafka_subscriber() -> None:
             try:
                 consumer.subscribe([settings.kafka_topic])
                 logger.info(
-                    "Subscribed to Kafka topic %s at %s",
+                    "SUBSCRIBED at %s to Kafka topic %s at %s",
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     settings.kafka_topic,
                     settings.kafka_bootstrap_servers,
                 )
@@ -38,11 +39,9 @@ def start_kafka_subscriber() -> None:
                         raise KafkaException(msg.error())
 
                     payload = json.loads(msg.value().decode("utf-8"))
-                    device_id = payload.get("device_id", "unknown")
-                    temperature = float(payload["temperature"])
-                    window_processor.add_reading(device_id, temperature)
+                    process_reading(payload)
             except Exception as exc:
-                logger.warning("Kafka subscriber error: %s. Retrying in 3s...", exc)
+                logger.warning("RECONNECTING after Kafka error: %s. Retrying in 3s...", exc)
                 time.sleep(3)
             finally:
                 consumer.close()

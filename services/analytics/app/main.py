@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import settings
+from app.service_metrics import get_metrics
 from app.subscribers.kafka_subscriber import start_kafka_subscriber
 from app.subscribers.mqtt_subscriber import start_mqtt_subscriber
 from app.window_processor import window_loop, window_processor
@@ -47,3 +48,8 @@ async def stats() -> dict:
     if last_stats is None:
         return {"message": "No window processed yet"}
     return last_stats
+
+
+@app.get("/metrics")
+async def metrics() -> dict:
+    return get_metrics()

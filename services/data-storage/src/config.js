@@ -4,6 +4,7 @@ module.exports = {
     host: process.env.MQTT_HOST || 'mosquitto',
     port: Number(process.env.MQTT_PORT || 1883),
     topic: process.env.MQTT_TOPIC || 'iot/agriculture/sensors',
+    subscribeQos: Number(process.env.MQTT_SUBSCRIBE_QOS || 2),
   },
   kafka: {
     bootstrapServers: process.env.KAFKA_BOOTSTRAP_SERVERS || 'kafka:9092',
@@ -17,4 +18,6 @@ module.exports = {
     user: process.env.POSTGRES_USER || 'iot',
     password: process.env.POSTGRES_PASSWORD || 'iot',
   },
+  batchSize: Number(process.env.STORAGE_BATCH_SIZE || 1),
+  metricsPort: Number(process.env.METRICS_PORT || 3000),
 };
