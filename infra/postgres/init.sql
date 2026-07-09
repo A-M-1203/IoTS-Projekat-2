@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS sensor_readings (
+    id              BIGSERIAL PRIMARY KEY,
+    received_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    timestamp       TIMESTAMPTZ NOT NULL,
+    device_id       VARCHAR(50) NOT NULL,
+    location        VARCHAR(100),
+    crop_type       VARCHAR(50),
+    season          VARCHAR(20),
+    temperature     DOUBLE PRECISION,
+    humidity        DOUBLE PRECISION,
+    rainfall        DOUBLE PRECISION,
+    soil_moisture   DOUBLE PRECISION,
+    soil_ph         DOUBLE PRECISION,
+    light_intensity DOUBLE PRECISION,
+    fertilizer_used DOUBLE PRECISION,
+    irrigation_needed INTEGER,
+    crop_health     VARCHAR(50),
+    yield_estimate  DOUBLE PRECISION,
+    pest_risk       VARCHAR(20),
+    anomaly_flag    INTEGER
+);

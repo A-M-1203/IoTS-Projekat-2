@@ -1,0 +1,120 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-iot_agriculture}
+      POSTGRES_USER: ${POSTGRES_USER:-iot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iot}
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-iot} -d ${POSTGRES_DB:-iot_agriculture}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mosquitto:
+    profiles: [mqtt]
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -t '$$SYS/#' -C 1 -W 3 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    profiles: [kafka]
+    image: apache/kafka:3.9.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  data-ingestion:
+    build: ./services/data-ingestion
+    environment:
+      BROKER_TYPE: ${BROKER_TYPE:-mqtt}
+      MQTT_HOST: ${MQTT_HOST:-mosquitto}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_TOPIC: ${MQTT_TOPIC:-iot/agriculture/sensors}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-iot-agriculture-sensors}
+      BATCH_SIZE: ${BATCH_SIZE:-20}
+      BATCH_INTERVAL_SECONDS: ${BATCH_INTERVAL_SECONDS:-5}
+      CSV_FILE_PATH: ${CSV_FILE_PATH:-/data/BIED_Smart_Agriculture_Dataset.csv}
+    volumes:
+      - ./BIED_Smart_Agriculture_Dataset.csv:/data/BIED_Smart_Agriculture_Dataset.csv:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+        required: false
+      kafka:
+        condition: service_healthy
+        required: false
+    restart: on-failure
+
+  data-storage:
+    build: ./services/data-storage
+    environment:
+      BROKER_TYPE: ${BROKER_TYPE:-mqtt}
+      MQTT_HOST: ${MQTT_HOST:-mosquitto}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_TOPIC: ${MQTT_TOPIC:-iot/agriculture/sensors}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-iot-agriculture-sensors}
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-iot_agriculture}
+      POSTGRES_USER: ${POSTGRES_USER:-iot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iot}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+        required: false
+      kafka:
+        condition: service_healthy
+        required: false
+    restart: on-failure
+
+  analytics:
+    build: ./services/analytics
+    ports:
+      - "8000:8000"
+    environment:
+      BROKER_TYPE: ${BROKER_TYPE:-mqtt}
+      MQTT_HOST: ${MQTT_HOST:-mosquitto}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_TOPIC: ${MQTT_TOPIC:-iot/agriculture/sensors}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-iot-agriculture-sensors}
+      TEMP_ALERT_THRESHOLD: ${TEMP_ALERT_THRESHOLD:-50}
+      WINDOW_SIZE_SECONDS: ${WINDOW_SIZE_SECONDS:-10}
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+        required: false
+      kafka:
+        condition: service_healthy
+        required: false
+    restart: on-failure

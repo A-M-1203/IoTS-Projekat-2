@@ -1,0 +1,14 @@
+{
+  "name": "data-storage",
+  "version": "1.0.0",
+  "description": "IoT Data Storage service - subscribes to broker and writes to PostgreSQL",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "kafkajs": "^2.2.4",
+    "mqtt": "^5.10.3",
+    "pg": "^8.13.1"
+  }
+}
