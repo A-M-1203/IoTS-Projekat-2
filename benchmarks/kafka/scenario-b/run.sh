@@ -19,17 +19,16 @@ log_progress "=== Scenario B Kafka: network disconnect ${OUTAGE_SECONDS}s ==="
 
 setup_stack kafka 1
 log_progress "Copying benchmark payload to Kafka container..."
-docker compose --profile kafka cp "$PAYLOAD_FILE" kafka:/tmp/bench_payload.json
+kafka_copy_payload "$PAYLOAD_FILE"
 
 start_stats_monitor "$RESULT_STATS"
 
 log_progress "Starting background low-rate producer..."
-docker compose --profile kafka exec -d kafka bash -c "
+kafka_exec -d bash -c "
 while true; do
   /opt/kafka/bin/kafka-producer-perf-test.sh \
     --topic $KAFKA_TOPIC \
     --num-records $((DEVICES * BENCHMARK_MESSAGES_PER_DEVICE)) \
-    --record-size $BENCHMARK_PAYLOAD_SIZE \
     --throughput $DEVICES \
     --payload-file /tmp/bench_payload.json \
     --producer-props acks=1 bootstrap.servers=localhost:9092 \
@@ -40,7 +39,7 @@ done
 
 log_progress "Baseline phase — waiting 20s before network outage..."
 sleep 20
-OFFSET_BEFORE=$(docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+OFFSET_BEFORE=$(kafka_exec /opt/kafka/bin/kafka-consumer-groups.sh \
   --bootstrap-server localhost:9092 --describe --group data-storage-group 2>/dev/null | awk 'NR>1 {print $4}' | tail -1)
 OFFSET_BEFORE="${OFFSET_BEFORE:-0}"
 
@@ -70,7 +69,7 @@ done
 
 log_progress "Collecting post-recovery offset (10s)..."
 sleep 10
-OFFSET_AFTER=$(docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+OFFSET_AFTER=$(kafka_exec /opt/kafka/bin/kafka-consumer-groups.sh \
   --bootstrap-server localhost:9092 --describe --group data-storage-group 2>/dev/null | awk 'NR>1 {print $4}' | tail -1)
 OFFSET_AFTER="${OFFSET_AFTER:-0}"
 LAG_AFTER="$(get_kafka_consumer_lag data-storage-group)"

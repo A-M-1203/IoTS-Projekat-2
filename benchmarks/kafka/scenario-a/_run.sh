@@ -24,8 +24,8 @@ log_progress "=== Scenario A Kafka: clients=$CLIENTS acks=$ACKS sent=$SENT ==="
 setup_stack kafka 500
 
 log_progress "Copying benchmark payload to Kafka container..."
-docker compose --profile kafka cp "$PAYLOAD_FILE" kafka:/tmp/bench_payload.json
-docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-topics.sh \
+kafka_copy_payload "$PAYLOAD_FILE"
+kafka_exec /opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server localhost:9092 \
   --create --if-not-exists --topic "$KAFKA_TOPIC" \
   --partitions 1 --replication-factor 1 || true
@@ -34,10 +34,9 @@ start_stats_monitor "$RESULT_STATS"
 START_TS=$(date +%s)
 
 log_progress "Publishing $SENT messages via kafka-producer-perf-test (this may take a while)..."
-BENCH_OUTPUT=$(docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-producer-perf-test.sh \
+BENCH_OUTPUT=$(kafka_exec /opt/kafka/bin/kafka-producer-perf-test.sh \
   --topic "$KAFKA_TOPIC" \
   --num-records "$SENT" \
-  --record-size "$BENCHMARK_PAYLOAD_SIZE" \
   --throughput -1 \
   --payload-file /tmp/bench_payload.json \
   --producer-props "acks=${ACKS} bootstrap.servers=localhost:9092" \

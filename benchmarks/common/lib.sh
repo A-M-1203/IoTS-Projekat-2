@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$COMMON_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
 STATS_PID=""
@@ -57,6 +57,29 @@ emqtt_bench_exec() {
   MSYS_NO_PATHCONV=1 docker compose --profile mqtt exec "$tty_flag" emqtt-bench /emqtt_bench/bin/emqtt_bench "$@"
 }
 
+# Wrapper for kafka exec — MSYS_NO_PATHCONV prevents Git Bash on Windows
+# from rewriting /opt/kafka/... to C:/Program Files/Git/opt/kafka/...
+kafka_exec() {
+  local tty_flag="-T"
+  if [[ "${1:-}" == "-d" ]]; then
+    tty_flag="-d"
+    shift
+  fi
+  MSYS_NO_PATHCONV=1 docker compose --profile kafka exec "$tty_flag" kafka "$@"
+}
+
+kafka_copy_payload() {
+  local payload_file
+  payload_file="$(abs_path "$1")"
+  if [[ ! -f "$payload_file" ]]; then
+    log_progress "ERROR: Payload file not found: $payload_file" >&2
+    return 1
+  fi
+  # Avoid docker compose cp on Windows — MSYS paths like /c/Faks/... break as C:\c:
+  MSYS_NO_PATHCONV=1 docker compose --profile kafka exec -T kafka \
+    sh -c 'cat > /tmp/bench_payload.json' < "$payload_file"
+}
+
 log_progress() {
   echo "[$(date -u +%H:%M:%S)] $*"
 }
@@ -89,7 +112,7 @@ wait_for_healthy() {
     if [[ "$COMPOSE_PROFILE" == "mqtt" ]]; then
       docker compose --profile mqtt exec -T mosquitto mosquitto_sub -h localhost -t '$SYS/#' -C 1 -W 2 >/dev/null 2>&1 && broker_ok=1
     else
-      docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 && broker_ok=1
+      kafka_exec /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 && broker_ok=1
     fi
 
     curl -sf http://localhost:3000/health >/dev/null 2>&1 && storage_ok=1
@@ -119,8 +142,6 @@ setup_stack() {
   log_progress "Setting up stack (broker=$broker, STORAGE_BATCH_SIZE=$batch_size)"
   log_progress "Stopping any existing containers..."
   docker compose --profile "$broker" down -v --remove-orphans 2>/dev/null || true
-  log_progress "Starting postgres, data-storage, analytics..."
-  docker compose --profile "$broker" up -d --build postgres data-storage analytics
 
   if [[ "$broker" == "mqtt" ]]; then
     log_progress "Starting mosquitto and emqtt-bench..."
@@ -128,8 +149,14 @@ setup_stack() {
   else
     log_progress "Starting kafka broker..."
     docker compose --profile kafka up -d kafka
+  fi
+
+  log_progress "Starting postgres, data-storage, analytics..."
+  docker compose --profile "$broker" up -d --build postgres data-storage analytics
+
+  if [[ "$broker" == "kafka" ]]; then
     log_progress "Creating Kafka topic if needed..."
-    docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-topics.sh \
+    kafka_exec /opt/kafka/bin/kafka-topics.sh \
       --bootstrap-server localhost:9092 \
       --create --if-not-exists --topic "$KAFKA_TOPIC" \
       --partitions 1 --replication-factor 1 || true
@@ -153,7 +180,7 @@ start_stats_monitor() {
 
   stop_orphan_stats_monitors
 
-  bash "$SCRIPT_DIR/docker_stats.sh" "$output_csv" "$COMPOSE_PROFILE" 2 &
+  bash "$COMMON_DIR/docker_stats.sh" "$output_csv" "$COMPOSE_PROFILE" 2 &
   STATS_PID=$!
   STATS_MONITOR_CSV="$output_csv"
   echo "$STATS_PID" > "${output_csv}.monitor.pid"
@@ -184,7 +211,7 @@ aggregate_resources() {
   mkdir -p "$(dirname "$output_json")"
   if [[ -f "$stats_csv" ]]; then
     log_progress "Aggregating container resource metrics from $stats_csv -> $output_json"
-    python3 "$SCRIPT_DIR/aggregate_stats.py" "$stats_csv" "$output_json"
+    python3 "$COMMON_DIR/aggregate_stats.py" "$stats_csv" "$output_json"
     log_progress "Resource metrics saved to $output_json"
   else
     echo "{}" > "$output_json"
@@ -305,7 +332,7 @@ get_container_name() {
 
 get_kafka_consumer_lag() {
   local group="${1:-data-storage-group}"
-  docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+  kafka_exec /opt/kafka/bin/kafka-consumer-groups.sh \
     --bootstrap-server localhost:9092 \
     --describe --group "$group" 2>/dev/null | awk 'NR>1 {lag+=$6} END {print lag+0}'
 }
@@ -320,4 +347,4 @@ ensure_results_dir() {
   mkdir -p "results/scenario-${scenario}/${broker}"
 }
 
-SENSOR_PAYLOAD="$(cat "$SCRIPT_DIR/payloads/sensor.json")"
+SENSOR_PAYLOAD="$(cat "$COMMON_DIR/payloads/sensor.json")"

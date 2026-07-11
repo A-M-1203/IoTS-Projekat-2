@@ -42,7 +42,7 @@ print(json.dumps(payload))
 PY
 )
 
-  printf '%s\n' "$PAYLOAD" | docker compose --profile kafka exec -T kafka \
+  printf '%s\n' "$PAYLOAD" | kafka_exec \
     /opt/kafka/bin/kafka-console-producer.sh \
     --bootstrap-server localhost:9092 \
     --topic "$KAFKA_TOPIC" >/dev/null 2>&1 || true

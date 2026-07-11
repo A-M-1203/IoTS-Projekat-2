@@ -22,13 +22,12 @@ log_progress "=== Scenario C Kafka: burst ${BASELINE_DEVICES} -> ${BURST_DEVICES
 
 setup_stack kafka 500
 log_progress "Copying benchmark payload to Kafka container..."
-docker compose --profile kafka cp "$PAYLOAD_FILE" kafka:/tmp/bench_payload.json
+kafka_copy_payload "$PAYLOAD_FILE"
 start_stats_monitor "$RESULT_STATS"
 
 log_progress "Phase 1/3: Baseline load (${BASELINE_DEVICES} devices)..."
-docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-producer-perf-test.sh \
+kafka_exec /opt/kafka/bin/kafka-producer-perf-test.sh \
   --topic "$KAFKA_TOPIC" --num-records $((BASELINE_DEVICES * BENCHMARK_MESSAGES_PER_DEVICE)) \
-  --record-size "$BENCHMARK_PAYLOAD_SIZE" \
   --throughput "$BASELINE_DEVICES" --payload-file /tmp/bench_payload.json \
   --producer-props acks=1 bootstrap.servers=localhost:9092 --num-threads "$BASELINE_DEVICES" || true
 
@@ -42,9 +41,9 @@ for ((i = 0; i < 30; i++)); do
 done
 
 log_progress "Phase 2/3: Burst load (${BURST_DEVICES} devices)..."
-docker compose --profile kafka exec -T kafka /opt/kafka/bin/kafka-producer-perf-test.sh \
+kafka_exec /opt/kafka/bin/kafka-producer-perf-test.sh \
   --topic "$KAFKA_TOPIC" --num-records $((BURST_DEVICES * BENCHMARK_MESSAGES_PER_DEVICE)) \
-  --record-size "$BENCHMARK_PAYLOAD_SIZE" --throughput "$BURST_DEVICES" \
+  --throughput "$BURST_DEVICES" \
   --payload-file /tmp/bench_payload.json \
   --producer-props acks=1 bootstrap.servers=localhost:9092 --num-threads "$BURST_DEVICES" || true
 
