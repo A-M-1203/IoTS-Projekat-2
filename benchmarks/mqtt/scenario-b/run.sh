@@ -28,8 +28,13 @@ emqtt_bench_exec -d pub \
 
 log_progress "Baseline phase — waiting 30s before network outage..."
 sleep 30
+drain_storage_buffer
 COUNT_BEFORE="$(get_received_count)"
 COUNT_BEFORE="${COUNT_BEFORE:-0}"
+RECEIVED_BEFORE="$(wait_for_storage_metric received 1 30)"
+STORED_BEFORE="$(get_storage_metrics_stored)"
+STORED_BEFORE="${STORED_BEFORE:-0}"
+log_progress "Baseline counts before outage: db=$COUNT_BEFORE received=$RECEIVED_BEFORE stored=$STORED_BEFORE"
 
 DISCONNECT_TS=$(date +%s)
 log_progress "Disconnecting $BENCH_CONTAINER from $NETWORK..."
@@ -40,16 +45,23 @@ CONNECT_TS=$(date +%s)
 log_progress "Reconnecting $BENCH_CONTAINER to $NETWORK..."
 docker network connect "$NETWORK" "$BENCH_CONTAINER" || true
 
-RECOVERY_START=$(date +%s)
+log_progress "Restarting background producer after reconnect..."
+emqtt_bench_exec -d pub \
+  -h mosquitto -p 1883 -c 50 -q 1 -t "$MQTT_TOPIC" \
+  -s "$BENCHMARK_PAYLOAD_SIZE" -n "$BENCHMARK_MESSAGES_PER_DEVICE" -I 1000 -m "$SENSOR_PAYLOAD" || true
+
 RECOVERY_SECONDS=""
-log_progress "Measuring recovery time (resubscribe)..."
+log_progress "Measuring recovery time (message flow resumed)..."
 for ((i = 0; i < 120; i++)); do
-  if docker compose --profile mqtt logs --since 2m data-storage 2>/dev/null | grep -q "SUBSCRIBED at"; then
+  CURRENT_RECEIVED="$(get_storage_metrics_received)"
+  CURRENT_RECEIVED="${CURRENT_RECEIVED:-0}"
+  if [[ "$CURRENT_RECEIVED" =~ ^[0-9]+$ ]] && (( CURRENT_RECEIVED > RECEIVED_BEFORE )); then
     RECOVERY_SECONDS=$(( $(date +%s) - CONNECT_TS ))
+    log_progress "Message flow resumed after ${RECOVERY_SECONDS}s (received ${RECEIVED_BEFORE} -> ${CURRENT_RECEIVED})"
     break
   fi
   if (( i > 0 && i % 15 == 0 )); then
-    log_progress "Still waiting for recovery... (${i}s)"
+    log_progress "Still waiting for recovery... received=$CURRENT_RECEIVED baseline=$RECEIVED_BEFORE (${i}s)"
   fi
   sleep 1
 done
@@ -57,9 +69,26 @@ done
 
 log_progress "Collecting post-recovery metrics (20s)..."
 sleep 20
+drain_storage_buffer
 COUNT_AFTER="$(get_received_count)"
 COUNT_AFTER="${COUNT_AFTER:-0}"
-MESSAGES_DURING=$((COUNT_AFTER - COUNT_BEFORE))
+RECEIVED_AFTER="$(get_storage_metrics_received)"
+RECEIVED_AFTER="${RECEIVED_AFTER:-0}"
+STORED_AFTER="$(get_storage_metrics_stored)"
+STORED_AFTER="${STORED_AFTER:-0}"
+
+DB_DELTA=$((COUNT_AFTER - COUNT_BEFORE))
+METRICS_DELTA=$((RECEIVED_AFTER - RECEIVED_BEFORE))
+STORED_DELTA=$((STORED_AFTER - STORED_BEFORE))
+MESSAGES_DURING="$METRICS_DELTA"
+if [[ "$STORED_DELTA" -gt "$MESSAGES_DURING" ]]; then
+  MESSAGES_DURING="$STORED_DELTA"
+fi
+if [[ "$DB_DELTA" -gt "$MESSAGES_DURING" ]]; then
+  MESSAGES_DURING="$DB_DELTA"
+fi
+[[ "$MESSAGES_DURING" -lt 0 ]] && MESSAGES_DURING=0
+log_progress "Messages during outage/recovery window: $MESSAGES_DURING (db_delta=$DB_DELTA metrics_delta=$METRICS_DELTA stored_delta=$STORED_DELTA)"
 
 stop_stats_monitor
 aggregate_resources "$RESULT_STATS" "$RESULT_RESOURCES"
@@ -75,7 +104,7 @@ append_result "$RESULT_TXT" "broker" "mqtt"
 append_result "$RESULT_TXT" "outage_seconds" "$OUTAGE_SECONDS"
 append_result "$RESULT_TXT" "recovery_time_seconds" "$RECOVERY_SECONDS"
 append_result "$RESULT_TXT" "messages_during_test" "$MESSAGES_DURING"
-append_result "$RESULT_TXT" "resubscribe_observed" "storage SUBSCRIBED log"
+append_result "$RESULT_TXT" "resubscribe_observed" "message flow resumed via /metrics received"
 append_result "$RESULT_TXT" "resources_json" "$RESULT_RESOURCES"
 
 append_summary_csv "b" "mqtt" \

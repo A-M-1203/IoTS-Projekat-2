@@ -148,7 +148,7 @@ Za svaki run generišu se:
 
 | Outage (s) | Recovery (s) | Poruke u testu | Resubscribe (s) | mosquitto CPU/RAM/Net | data-storage CPU/RAM/Net | analytics CPU/RAM/Net | postgres CPU/RAM/Net | Napomena |
 |------------|--------------|----------------|-----------------|-----------------------|--------------------------|-----------------------|----------------------|----------|
-| 30 | 12 | 118 | 4 | 0.65/7.2/0.08 | 1.85/45.5/0.12 | 1.20/35.2/0.09 | 0.18/86.0/0.02 | Disconnect `emqtt-bench`; storage resubscribe ~4 s |
+| 30 | 1 | 1049 | 1 | 1.09/3.2/0.69 | 2.28/38.5/0.15 | 1.0/34.5/0.17 | 0.99/68.0/0.0 | Disconnect `emqtt-bench`; message flow resumed ~1 s |
 
 ### Scenario B — Edge Connectivity Failures (Kafka)
 

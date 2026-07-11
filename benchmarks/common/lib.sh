@@ -243,12 +243,52 @@ get_received_count() {
     psql -U iot -d iot_agriculture -t -A -c "SELECT COUNT(*) FROM sensor_readings;" 2>/dev/null | tr -d '[:space:]'
 }
 
+get_storage_metrics_field() {
+  local field="$1"
+  local metrics_json
+  metrics_json="$(curl -sf http://localhost:3000/metrics 2>/dev/null || echo '{}')"
+  STORAGE_METRICS_JSON="$metrics_json" python3 - "$field" <<'PY'
+import json
+import os
+import sys
+
+field = sys.argv[1]
+try:
+    data = json.loads(os.environ.get("STORAGE_METRICS_JSON", "{}"))
+    print(int(data.get(field, 0)))
+except (TypeError, ValueError, json.JSONDecodeError):
+    print(0)
+PY
+}
+
 get_storage_metrics_received() {
-  curl -sf http://localhost:3000/metrics 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('received',0))" 2>/dev/null || echo "0"
+  get_storage_metrics_field "received"
 }
 
 get_storage_metrics_stored() {
-  curl -sf http://localhost:3000/metrics 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('stored',0))" 2>/dev/null || echo "0"
+  get_storage_metrics_field "stored"
+}
+
+wait_for_storage_metric() {
+  local field="$1"
+  local min_value="${2:-1}"
+  local attempts="${3:-30}"
+  local value=0
+
+  for ((i = 1; i <= attempts; i++)); do
+    if [[ "$field" == "stored" ]]; then
+      value="$(get_storage_metrics_stored)"
+    else
+      value="$(get_storage_metrics_received)"
+    fi
+    if [[ "$value" =~ ^[0-9]+$ ]] && (( value >= min_value )); then
+      echo "$value"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "${value:-0}"
 }
 
 drain_storage_buffer() {
