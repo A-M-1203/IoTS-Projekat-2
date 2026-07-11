@@ -39,9 +39,16 @@ done
 
 log_progress "Baseline phase — waiting 20s before network outage..."
 sleep 20
-OFFSET_BEFORE=$(kafka_exec /opt/kafka/bin/kafka-consumer-groups.sh \
-  --bootstrap-server localhost:9092 --describe --group data-storage-group 2>/dev/null | awk 'NR>1 {print $4}' | tail -1)
-OFFSET_BEFORE="${OFFSET_BEFORE:-0}"
+
+OFFSET_BEFORE="0"
+for ((i = 0; i < 30; i++)); do
+  OFFSET_BEFORE="$(get_kafka_consumer_offset data-storage-group || echo 0)"
+  if [[ "${OFFSET_BEFORE:-0}" =~ ^[0-9]+$ ]] && (( OFFSET_BEFORE > 0 )); then
+    break
+  fi
+  sleep 1
+done
+log_progress "Consumer offset before outage: $OFFSET_BEFORE"
 
 BENCH_CONTAINER="$(get_container_name kafka)"
 log_progress "Disconnecting $BENCH_CONTAINER from $NETWORK..."
@@ -50,6 +57,10 @@ log_progress "Network outage in progress (${OUTAGE_SECONDS}s)..."
 sleep "$OUTAGE_SECONDS"
 log_progress "Reconnecting $BENCH_CONTAINER to $NETWORK..."
 docker network connect "$NETWORK" "$BENCH_CONTAINER" || true
+
+sleep 2
+LAG_AFTER="$(get_kafka_consumer_lag data-storage-group)"
+log_progress "Consumer lag immediately after reconnect: $LAG_AFTER"
 
 RECOVERY_START=$(date +%s)
 RECOVERY_SECONDS=""
@@ -69,10 +80,8 @@ done
 
 log_progress "Collecting post-recovery offset (10s)..."
 sleep 10
-OFFSET_AFTER=$(kafka_exec /opt/kafka/bin/kafka-consumer-groups.sh \
-  --bootstrap-server localhost:9092 --describe --group data-storage-group 2>/dev/null | awk 'NR>1 {print $4}' | tail -1)
-OFFSET_AFTER="${OFFSET_AFTER:-0}"
-LAG_AFTER="$(get_kafka_consumer_lag data-storage-group)"
+OFFSET_AFTER="$(get_kafka_consumer_offset data-storage-group)"
+log_progress "Consumer offset after recovery: $OFFSET_AFTER"
 
 stop_stats_monitor
 aggregate_resources "$RESULT_STATS" "$RESULT_RESOURCES"

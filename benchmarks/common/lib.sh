@@ -330,11 +330,79 @@ get_container_name() {
   docker compose --profile "$COMPOSE_PROFILE" ps --format '{{.Service}} {{.Name}}' | awk -v s="$service" '$1==s {print $2; exit}'
 }
 
+get_kafka_group_metrics() {
+  local group="${1:-data-storage-group}"
+  local describe_output
+  describe_output="$(kafka_exec /opt/kafka/bin/kafka-consumer-groups.sh \
+    --bootstrap-server localhost:9092 \
+    --describe --group "$group" 2>/dev/null || true)"
+  python3 - "$describe_output" <<'PY'
+import sys
+
+text = sys.argv[1] if len(sys.argv) > 1 else ""
+lines = [line.strip().replace("\r", "") for line in text.splitlines() if line.strip()]
+header = None
+header_idx = -1
+
+for idx, line in enumerate(lines):
+    if "CURRENT-OFFSET" in line and "LAG" in line:
+        header = line.split()
+        header_idx = idx
+        break
+
+if header is None:
+    print("0\t0\t0")
+    raise SystemExit
+
+columns = {
+    name: header.index(name)
+    for name in ("PARTITION", "CURRENT-OFFSET", "LOG-END-OFFSET", "LAG")
+    if name in header
+}
+
+current = 0
+log_end = 0
+lag = 0
+current_seen = False
+
+for line in lines[header_idx + 1 :]:
+    if line.startswith(("Consumer group", "Warning", "Note:")):
+        continue
+
+    parts = line.split()
+    if len(parts) <= max(columns.values()):
+        continue
+
+    try:
+        int(parts[columns["PARTITION"]])
+    except (ValueError, KeyError, IndexError):
+        continue
+
+    cur = parts[columns["CURRENT-OFFSET"]]
+    end = parts[columns["LOG-END-OFFSET"]]
+    lag_val = parts[columns["LAG"]]
+
+    if cur != "-":
+        current += int(cur)
+        current_seen = True
+    if end != "-":
+        log_end += int(end)
+    if lag_val != "-":
+        lag += int(lag_val)
+
+offset = current if current_seen else log_end
+print(f"{offset}\t{log_end}\t{lag}")
+PY
+}
+
+get_kafka_consumer_offset() {
+  local group="${1:-data-storage-group}"
+  get_kafka_group_metrics "$group" | cut -f1 || echo "0"
+}
+
 get_kafka_consumer_lag() {
   local group="${1:-data-storage-group}"
-  kafka_exec /opt/kafka/bin/kafka-consumer-groups.sh \
-    --bootstrap-server localhost:9092 \
-    --describe --group "$group" 2>/dev/null | awk 'NR>1 {lag+=$6} END {print lag+0}'
+  get_kafka_group_metrics "$group" | cut -f3 || echo "0"
 }
 
 get_mqtt_queue_depth() {

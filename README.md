@@ -154,7 +154,7 @@ Za svaki run generišu se:
 
 | Outage (s) | Recovery (s) | Offset pre | Offset posle | Lag posle | kafka CPU/RAM/Net | data-storage CPU/RAM/Net | analytics CPU/RAM/Net | postgres CPU/RAM/Net | Napomena |
 |------------|--------------|------------|--------------|-----------|-------------------|--------------------------|-----------------------|----------------------|----------|
-| 30 | 7 | - | - | 0 | 70.8/487/0.01 | 7.7/31.2/0.01 | 0.32/37.9/0.03 | 1.13/90.0/0.0 | Disconnect Kafka brokera; consumer lag ≤5 za ~7 s |
+| 30 | 7 | 0 | 0 | 0 | 126.4/400/0.05 | 6.15/30.1/0.02 | 0.23/35.1/0.08 | 1.19/68.2/0.0 | Disconnect Kafka brokera; consumer lag ≤5 za ~7 s |
 
 ### Scenario C — Burst Event Load (MQTT)
 
