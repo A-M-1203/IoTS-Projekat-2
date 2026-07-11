@@ -166,7 +166,7 @@ Za svaki run generišu se:
 
 | Baseline (uređaji) | Burst (uređaji) | Peak LAG | Recovery (s) | kafka CPU/RAM/Net | data-storage CPU/RAM/Net | analytics CPU/RAM/Net | postgres CPU/RAM/Net |
 |--------------------|-----------------|----------|--------------|-------------------|--------------------------|-----------------------|----------------------|
-| 50 | 200 | 22 | 8 | 5.80/348/1.65 | 6.10/47.5/1.72 | 3.65/36.0/1.38 | 1.48/87.8/0.16 |
+| 50 | 200 | 0 | 30 | 83.8/338/0.38 | 5.97/30.9/0.16 | 0.24/35.1/0.22 | 0.97/68.4/0.0 |
 
 ### Scenario D — Real-Time Alerting (MQTT)
 

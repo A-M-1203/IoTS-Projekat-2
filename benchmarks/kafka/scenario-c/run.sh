@@ -26,7 +26,7 @@ kafka_copy_payload "$PAYLOAD_FILE"
 start_stats_monitor "$RESULT_STATS"
 
 log_progress "Phase 1/3: Baseline load (${BASELINE_DEVICES} devices)..."
-kafka_exec /opt/kafka/bin/kafka-producer-perf-test.sh \
+kafka_producer_perf \
   --topic "$KAFKA_TOPIC" --num-records $((BASELINE_DEVICES * BENCHMARK_MESSAGES_PER_DEVICE)) \
   --throughput "$BASELINE_DEVICES" --payload-file /tmp/bench_payload.json \
   --producer-props acks=1 bootstrap.servers=localhost:9092 --num-threads "$BASELINE_DEVICES" || true
@@ -41,7 +41,7 @@ for ((i = 0; i < 30; i++)); do
 done
 
 log_progress "Phase 2/3: Burst load (${BURST_DEVICES} devices)..."
-kafka_exec /opt/kafka/bin/kafka-producer-perf-test.sh \
+kafka_producer_perf \
   --topic "$KAFKA_TOPIC" --num-records $((BURST_DEVICES * BENCHMARK_MESSAGES_PER_DEVICE)) \
   --throughput "$BURST_DEVICES" \
   --payload-file /tmp/bench_payload.json \

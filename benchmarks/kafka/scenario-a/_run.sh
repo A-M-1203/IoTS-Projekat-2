@@ -34,7 +34,7 @@ start_stats_monitor "$RESULT_STATS"
 START_TS=$(date +%s)
 
 log_progress "Publishing $SENT messages via kafka-producer-perf-test (this may take a while)..."
-BENCH_OUTPUT=$(kafka_exec /opt/kafka/bin/kafka-producer-perf-test.sh \
+BENCH_OUTPUT=$(kafka_producer_perf \
   --topic "$KAFKA_TOPIC" \
   --num-records "$SENT" \
   --throughput -1 \

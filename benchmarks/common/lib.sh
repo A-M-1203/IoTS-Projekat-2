@@ -80,6 +80,26 @@ kafka_copy_payload() {
     sh -c 'cat > /tmp/bench_payload.json' < "$payload_file"
 }
 
+# Kafka 3.9+ ProducerPerformance removed --num-threads; strip it for compatibility.
+kafka_producer_perf() {
+  local args=()
+  local skip_next=0
+
+  for arg in "$@"; do
+    if (( skip_next )); then
+      skip_next=0
+      continue
+    fi
+    if [[ "$arg" == "--num-threads" ]]; then
+      skip_next=1
+      continue
+    fi
+    args+=("$arg")
+  done
+
+  kafka_exec /opt/kafka/bin/kafka-producer-perf-test.sh "${args[@]}"
+}
+
 log_progress() {
   echo "[$(date -u +%H:%M:%S)] $*"
 }

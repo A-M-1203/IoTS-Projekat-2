@@ -31,8 +31,7 @@ while true; do
     --num-records $((DEVICES * BENCHMARK_MESSAGES_PER_DEVICE)) \
     --throughput $DEVICES \
     --payload-file /tmp/bench_payload.json \
-    --producer-props acks=1 bootstrap.servers=localhost:9092 \
-    --num-threads $DEVICES >/dev/null 2>&1
+    --producer-props acks=1 bootstrap.servers=localhost:9092 >/dev/null 2>&1
   sleep 1
 done
 " || true
