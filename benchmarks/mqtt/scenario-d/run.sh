@@ -22,7 +22,7 @@ setup_stack mqtt 1
 write_result_header "$RESULT_TXT"
 start_stats_monitor "$RESULT_STATS"
 
-LATENCIES_FILE="$(mktemp)"
+LATENCIES_FILE="$(bench_temp_file "scenario-d-mqtt-${TS}")"
 trap 'rm -f "$LATENCIES_FILE"' EXIT
 
 for ((run = 1; run <= RUNS; run++)); do
@@ -56,15 +56,7 @@ done
 stop_stats_monitor
 aggregate_resources "$RESULT_STATS" "$RESULT_RESOURCES"
 
-STATS=$(python3 -c "
-vals=[float(x.strip()) for x in open('$LATENCIES_FILE') if x.strip()]
-if not vals:
-    print('0,0,0,0')
-else:
-    vals.sort()
-    p95=vals[int(0.95*len(vals))-1] if len(vals)>1 else vals[0]
-    print(f'{sum(vals)/len(vals):.2f},{min(vals):.2f},{max(vals):.2f},{p95:.2f}')
-")
+STATS=$(compute_latency_stats "$LATENCIES_FILE")
 
 IFS=',' read -r AVG_LAT MIN_LAT MAX_LAT P95_LAT <<< "$STATS"
 

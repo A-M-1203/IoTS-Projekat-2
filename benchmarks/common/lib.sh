@@ -435,4 +435,31 @@ ensure_results_dir() {
   mkdir -p "results/scenario-${scenario}/${broker}"
 }
 
+bench_temp_file() {
+  local label="${1:-bench}"
+  mkdir -p "results/.tmp"
+  echo "results/.tmp/${label}_$$.tmp"
+}
+
+compute_latency_stats() {
+  local latencies_file="$1"
+  python3 - "$latencies_file" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.is_file():
+    print("0,0,0,0")
+    raise SystemExit
+
+vals = [float(x.strip()) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+if not vals:
+    print("0,0,0,0")
+else:
+    vals.sort()
+    p95 = vals[max(0, int(0.95 * len(vals)) - 1)]
+    print(f"{sum(vals)/len(vals):.2f},{min(vals):.2f},{max(vals):.2f},{p95:.2f}")
+PY
+}
+
 SENSOR_PAYLOAD="$(cat "$COMMON_DIR/payloads/sensor.json")"
