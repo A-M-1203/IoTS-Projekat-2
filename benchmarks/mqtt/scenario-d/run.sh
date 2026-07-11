@@ -10,6 +10,7 @@ ensure_results_dir "d" "mqtt"
 RESULT_TXT="results/scenario-d/mqtt/alerting_${TS}.txt"
 RESULT_STATS="results/scenario-d/mqtt/alerting_${TS}_stats.csv"
 RESULT_RESOURCES="results/scenario-d/mqtt/alerting_${TS}_resources.json"
+PAYLOAD_TEMPLATE="$SCRIPT_DIR/../../common/payloads/critical_sensor.json"
 RUNS=10
 
 log_progress "=== Scenario D MQTT: E2E alerting latency ($RUNS runs) ==="
@@ -27,28 +28,28 @@ trap 'rm -f "$LATENCIES_FILE"' EXIT
 
 for ((run = 1; run <= RUNS; run++)); do
   log_progress "Alert test run $run/$RUNS..."
-  PUBLISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
-  PAYLOAD=$(python3 - "$SCRIPT_DIR/../../common/payloads/critical_sensor.json" "$PUBLISHED_AT" "$run" <<'PY'
-import json, sys
+  PAYLOAD=$(python3 - "$PAYLOAD_TEMPLATE" "$run" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
+
 template = Path(sys.argv[1])
-published_at = sys.argv[2]
-run_id = sys.argv[3]
+run_id = sys.argv[2]
 payload = json.loads(template.read_text(encoding="utf-8"))
-payload["published_at"] = published_at
+payload["published_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 payload["message_id"] = f"bench-run-{run_id}"
 print(json.dumps(payload))
 PY
 )
+  PUBLISHED_AT=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['published_at'])" "$PAYLOAD")
 
-  emqtt_bench_exec pub \
-    -h mosquitto -p 1883 -c 1 -q 1 -t "$MQTT_TOPIC" \
-    -s "$BENCHMARK_PAYLOAD_SIZE" -n "$BENCHMARK_MESSAGES_PER_DEVICE" -m "$PAYLOAD" >/dev/null 2>&1 || true
+  mqtt_publish_json "$PAYLOAD" 1 "$MQTT_TOPIC"
 
-  sleep 2
-  LATENCY=$(curl -sf http://localhost:8000/metrics 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('last_e2e_latency_ms',0))" || echo "0")
-  log_progress "  run $run: e2e_latency_ms=$LATENCY"
-  echo "run=$run published_at=$PUBLISHED_AT e2e_latency_ms=$LATENCY" >> "$RESULT_TXT"
+  LATENCY=$(wait_for_e2e_latency "$PUBLISHED_AT" 15)
+  ALERT_AT="$(get_analytics_metrics_field last_alert_at)"
+  log_progress "  run $run: e2e_latency_ms=$LATENCY alert_at=${ALERT_AT:-n/a}"
+  echo "run=$run published_at=$PUBLISHED_AT alert_at=${ALERT_AT:-} e2e_latency_ms=$LATENCY" >> "$RESULT_TXT"
   echo "$LATENCY" >> "$LATENCIES_FILE"
   sleep 1
 done

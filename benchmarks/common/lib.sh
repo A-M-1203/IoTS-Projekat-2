@@ -173,6 +173,9 @@ setup_stack() {
 
   export BROKER_TYPE="$broker"
   export STORAGE_BATCH_SIZE="$batch_size"
+  export BENCHMARK_INSTANT_ALERT="${BENCHMARK_INSTANT_ALERT:-false}"
+  export BENCHMARK_ALERT_THRESHOLD="${BENCHMARK_ALERT_THRESHOLD:-40}"
+  export TEMP_ALERT_THRESHOLD="${TEMP_ALERT_THRESHOLD:-50}"
 
   log_progress "Setting up stack (broker=$broker, STORAGE_BATCH_SIZE=$batch_size)"
   log_progress "Stopping any existing containers..."
@@ -507,6 +510,83 @@ mqtt_pipeline_backlog() {
 
 mqtt_total_backlog() {
   mqtt_pipeline_backlog "${2:-0}"
+}
+
+# Publish a JSON payload via mosquitto_pub (reliable for benchmark alert payloads).
+mqtt_publish_json() {
+  local payload="$1"
+  local qos="${2:-1}"
+  local topic="${3:-$MQTT_TOPIC}"
+  local host_file
+
+  host_file="$(bench_temp_file "mqtt-pub")"
+  mkdir -p "$(dirname "$host_file")"
+  printf '%s' "$payload" > "$host_file"
+
+  # Avoid docker cp on Windows — MSYS paths like /c/Faks/... break as C:\c:
+  MSYS_NO_PATHCONV=1 docker compose --profile mqtt exec -T mosquitto \
+    sh -c 'cat > /tmp/bench_mqtt_payload.json' < "$host_file"
+  MSYS_NO_PATHCONV=1 docker compose --profile mqtt exec -T mosquitto \
+    mosquitto_pub -h localhost -p 1883 -t "$topic" -q "$qos" -f /tmp/bench_mqtt_payload.json
+
+  rm -f "$host_file"
+}
+
+get_analytics_metrics_field() {
+  local field="$1"
+  local metrics_json
+  metrics_json="$(curl -sf http://localhost:8000/metrics 2>/dev/null || echo '{}')"
+  ANALYTICS_METRICS_JSON="$metrics_json" python3 - "$field" <<'PY'
+import json
+import os
+import sys
+
+field = sys.argv[1]
+try:
+    data = json.loads(os.environ.get("ANALYTICS_METRICS_JSON", "{}"))
+    value = data.get(field)
+    if value is None:
+        print("")
+    else:
+        print(value)
+except (TypeError, ValueError, json.JSONDecodeError):
+    print("")
+PY
+}
+
+wait_for_e2e_latency() {
+  local expected_published_at="$1"
+  local timeout="${2:-15}"
+  local metrics_json latency=""
+
+  for ((i = 0; i < timeout * 4; i++)); do
+    metrics_json="$(curl -sf http://localhost:8000/metrics 2>/dev/null || echo '{}')"
+    latency="$(ANALYTICS_METRICS_JSON="$metrics_json" ANALYTICS_EXPECTED_PUBLISHED_AT="$expected_published_at" python3 - <<'PY'
+import json
+import os
+
+expected = os.environ.get("ANALYTICS_EXPECTED_PUBLISHED_AT", "")
+try:
+    data = json.loads(os.environ.get("ANALYTICS_METRICS_JSON", "{}"))
+except json.JSONDecodeError:
+    print("")
+    raise SystemExit
+if data.get("last_published_at") != expected:
+    print("")
+    raise SystemExit
+latency = data.get("last_e2e_latency_ms")
+print("" if latency is None else latency)
+PY
+)"
+    if [[ -n "$latency" ]]; then
+      echo "$latency"
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  echo "0"
+  return 1
 }
 
 ensure_results_dir() {
