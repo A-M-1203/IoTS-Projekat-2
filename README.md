@@ -160,7 +160,7 @@ Za svaki run generišu se:
 
 | Baseline (uređaji) | Burst (uređaji) | Peak backlog | Recovery (s) | mosquitto CPU/RAM/Net | data-storage CPU/RAM/Net | analytics CPU/RAM/Net | postgres CPU/RAM/Net |
 |--------------------|-----------------|--------------|--------------|-----------------------|--------------------------|-----------------------|----------------------|
-| 50 | 200 | 28 | 11 | 2.85/8.5/1.20 | 6.40/48.0/1.85 | 3.80/36.2/1.42 | 1.55/88.0/0.18 |
+| 50 | 200 | 0 | 10 | 0.85/2.74/0.02 | 0.29/38.65/0.14 | 0.19/34.43/0.0 | 0.5/68.11/0.0 |
 
 ### Scenario C — Burst Event Load (Kafka)
 

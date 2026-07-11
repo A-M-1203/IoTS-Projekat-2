@@ -57,6 +57,21 @@ emqtt_bench_exec() {
   MSYS_NO_PATHCONV=1 docker compose --profile mqtt exec "$tty_flag" emqtt-bench /emqtt_bench/bin/emqtt_bench "$@"
 }
 
+emqtt_bench_stop() {
+  MSYS_NO_PATHCONV=1 docker compose --profile mqtt exec -T emqtt-bench \
+    pkill -f emqtt_bench 2>/dev/null || true
+}
+
+# Run emqtt_bench pub for a fixed duration, then stop it.
+emqtt_bench_pub_for() {
+  local duration_s="$1"
+  shift
+
+  emqtt_bench_exec -d pub "$@" || true
+  sleep "$duration_s"
+  emqtt_bench_stop
+}
+
 # Wrapper for kafka exec — MSYS_NO_PATHCONV prevents Git Bash on Windows
 # from rewriting /opt/kafka/... to C:/Program Files/Git/opt/kafka/...
 kafka_exec() {
@@ -466,7 +481,32 @@ get_kafka_consumer_lag() {
 }
 
 get_mqtt_queue_depth() {
-  docker compose --profile mqtt exec -T mosquitto mosquitto_sub -h localhost -t '$SYS/broker/messages/stored' -C 1 -W 2 2>/dev/null | tail -1 || echo "0"
+  local depth
+  depth="$(docker compose --profile mqtt exec -T mosquitto mosquitto_sub -h localhost -t '$SYS/broker/messages/stored' -C 1 -W 2 2>/dev/null | tail -1 || echo "0")"
+  depth="${depth//[^0-9]/}"
+  echo "${depth:-0}"
+}
+
+get_storage_buffered() {
+  get_storage_metrics_field "buffered"
+}
+
+# Storage pipeline lag relative to a captured baseline (fast; no broker $SYS query).
+mqtt_pipeline_backlog() {
+  local pipeline_baseline="${1:-0}"
+  local received stored pipeline_delta
+
+  received="$(get_storage_metrics_received)"
+  stored="$(get_storage_metrics_stored)"
+  received="${received:-0}"
+  stored="${stored:-0}"
+  pipeline_delta=$((received - stored - pipeline_baseline))
+  [[ "$pipeline_delta" -lt 0 ]] && pipeline_delta=0
+  echo "$pipeline_delta"
+}
+
+mqtt_total_backlog() {
+  mqtt_pipeline_backlog "${2:-0}"
 }
 
 ensure_results_dir() {
