@@ -95,6 +95,74 @@ kafka_copy_payload() {
     sh -c 'cat > /tmp/bench_payload.json' < "$payload_file"
 }
 
+emqtt_copy_payload() {
+  local payload_file
+  payload_file="$(abs_path "$1")"
+  if [[ ! -f "$payload_file" ]]; then
+    log_progress "ERROR: Payload file not found: $payload_file" >&2
+    return 1
+  fi
+  MSYS_NO_PATHCONV=1 docker compose --profile mqtt exec -T emqtt-bench \
+    sh -c 'cat > /tmp/bench_payload.json' < "$payload_file"
+}
+
+# Copy a JSON payload file into the mosquitto container (Windows-safe).
+mqtt_copy_payload() {
+  local payload_file
+  payload_file="$(abs_path "$1")"
+  if [[ ! -f "$payload_file" ]]; then
+    log_progress "ERROR: Payload file not found: $payload_file" >&2
+    return 1
+  fi
+  MSYS_NO_PATHCONV=1 docker compose --profile mqtt exec -T mosquitto \
+    sh -c 'tr -d "\r" > /tmp/bench_mqtt_payload.json' < "$payload_file"
+}
+
+# Publish N messages via parallel mosquitto_pub (reliable JSON delivery on Windows).
+mqtt_parallel_publish() {
+  local clients="$1"
+  local qos="$2"
+  local messages_per_client="${3:-1}"
+  local topic="${4:-$MQTT_TOPIC}"
+  local wave_size="${5:-200}"
+  local total=$((clients * messages_per_client))
+
+  MSYS_NO_PATHCONV=1 docker compose --profile mqtt exec -T \
+    -e "MQTT_TOPIC=$topic" \
+    -e "QOS=$qos" \
+    -e "TOTAL=$total" \
+    -e "WAVE_SIZE=$wave_size" \
+    mosquitto sh -c '
+      published=0
+      while [ "$published" -lt "$TOTAL" ]; do
+        in_wave=0
+        while [ "$in_wave" -lt "$WAVE_SIZE" ] && [ "$published" -lt "$TOTAL" ]; do
+          mosquitto_pub -h localhost -p 1883 -t "$MQTT_TOPIC" -q "$QOS" \
+            -f /tmp/bench_mqtt_payload.json &
+          published=$((published + 1))
+          in_wave=$((in_wave + 1))
+        done
+        wait
+      done
+    '
+}
+
+wait_for_storage_mqtt_subscribed() {
+  local attempts="${1:-30}"
+
+  log_progress "Waiting for data-storage MQTT subscription..."
+  for ((i = 1; i <= attempts; i++)); do
+    if docker compose --profile mqtt logs --tail 40 data-storage 2>/dev/null | grep -q "SUBSCRIBED"; then
+      log_progress "data-storage subscribed to MQTT."
+      return 0
+    fi
+    sleep 1
+  done
+
+  log_progress "WARNING: data-storage SUBSCRIBED not seen in logs" >&2
+  return 1
+}
+
 # Kafka 3.9+ ProducerPerformance removed --num-threads; strip it for compatibility.
 kafka_producer_perf() {
   local args=()
@@ -523,9 +591,8 @@ mqtt_publish_json() {
   mkdir -p "$(dirname "$host_file")"
   printf '%s' "$payload" > "$host_file"
 
-  # Avoid docker cp on Windows — MSYS paths like /c/Faks/... break as C:\c:
   MSYS_NO_PATHCONV=1 docker compose --profile mqtt exec -T mosquitto \
-    sh -c 'cat > /tmp/bench_mqtt_payload.json' < "$host_file"
+    sh -c 'tr -d "\r" > /tmp/bench_mqtt_payload.json' < "$host_file"
   MSYS_NO_PATHCONV=1 docker compose --profile mqtt exec -T mosquitto \
     mosquitto_pub -h localhost -p 1883 -t "$topic" -q "$qos" -f /tmp/bench_mqtt_payload.json
 

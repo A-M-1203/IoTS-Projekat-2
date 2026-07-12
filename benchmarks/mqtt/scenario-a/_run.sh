@@ -1,12 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLIENTS="${1:?clients required}"
-QOS="${2:?qos required}"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../common/lib.sh
 source "$SCRIPT_DIR/../../common/lib.sh"
+
+usage() {
+  echo "Usage: $0 <clients> <qos>" >&2
+  echo "  clients: number of MQTT clients (100, 1000, or 10000)" >&2
+  echo "  qos:     0, 1, or 2" >&2
+  echo "" >&2
+  echo "Examples:" >&2
+  echo "  bash $0 100 1" >&2
+  echo "  bash run_100_qos1.sh" >&2
+  exit 1
+}
+
+if [[ $# -lt 2 ]]; then
+  usage
+fi
+
+CLIENTS="$1"
+QOS="$2"
 
 CONFIG="devices_${CLIENTS}_qos${QOS}"
 TS="$(timestamp_utc)"
@@ -18,23 +33,28 @@ RESULT_RESOURCES="results/scenario-a/mqtt/${CONFIG}_${TS}_resources.json"
 MESSAGES_PER_DEVICE="${BENCHMARK_MESSAGES_PER_DEVICE}"
 SENT=$((CLIENTS * MESSAGES_PER_DEVICE))
 
+PAYLOAD_FILE="$SCRIPT_DIR/../../common/payloads/sensor.json"
+
 log_progress "=== Scenario A MQTT: clients=$CLIENTS qos=$QOS sent=$SENT ==="
 
 setup_stack mqtt 500
+wait_for_storage_mqtt_subscribed 30
 start_stats_monitor "$RESULT_STATS"
 START_TS=$(date +%s)
 
-log_progress "Publishing $SENT messages via emqtt-bench (this may take a while)..."
-BENCH_OUTPUT=$(emqtt_bench_exec pub \
-  -h mosquitto -p 1883 \
-  -c "$CLIENTS" -q "$QOS" \
-  -t "$MQTT_TOPIC" \
-  -s "$BENCHMARK_PAYLOAD_SIZE" \
-  -n "$MESSAGES_PER_DEVICE" \
-  -m "$SENSOR_PAYLOAD" 2>&1) || true
+log_progress "Copying benchmark payload to mosquitto container..."
+mqtt_copy_payload "$PAYLOAD_FILE"
 
-log_progress "Load generation finished."
-echo "$BENCH_OUTPUT"
+log_progress "Publishing $SENT messages via mosquitto_pub ($CLIENTS clients x $MESSAGES_PER_DEVICE msg)..."
+START_PUBLISH=$(date +%s)
+mqtt_parallel_publish "$CLIENTS" "$QOS" "$MESSAGES_PER_DEVICE" "$MQTT_TOPIC" 200
+PUBLISH_SECONDS=$(( $(date +%s) - START_PUBLISH ))
+log_progress "Publish finished in ${PUBLISH_SECONDS}s"
+
+METRICS_RECEIVED="$(get_storage_metrics_received)"
+METRICS_STORED="$(get_storage_metrics_stored)"
+METRICS_ERRORS="$(get_storage_metrics_field errors)"
+log_progress "Storage after publish: received=$METRICS_RECEIVED stored=$METRICS_STORED errors=$METRICS_ERRORS"
 
 log_progress "Calculating received count and loss..."
 wait_for_drain 180
