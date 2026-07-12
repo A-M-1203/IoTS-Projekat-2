@@ -92,7 +92,7 @@ kafka_copy_payload() {
   fi
   # Avoid docker compose cp on Windows — MSYS paths like /c/Faks/... break as C:\c:
   MSYS_NO_PATHCONV=1 docker compose --profile kafka exec -T kafka \
-    sh -c 'cat > /tmp/bench_payload.json' < "$payload_file"
+    sh -c 'tr -d "\r" > /tmp/bench_payload.json' < "$payload_file"
 }
 
 emqtt_copy_payload() {
@@ -160,6 +160,22 @@ wait_for_storage_mqtt_subscribed() {
   done
 
   log_progress "WARNING: data-storage SUBSCRIBED not seen in logs" >&2
+  return 1
+}
+
+wait_for_storage_kafka_subscribed() {
+  local attempts="${1:-30}"
+
+  log_progress "Waiting for data-storage Kafka subscription..."
+  for ((i = 1; i <= attempts; i++)); do
+    if docker compose --profile kafka logs --tail 40 data-storage 2>/dev/null | grep -q "SUBSCRIBED.*Kafka topic"; then
+      log_progress "data-storage subscribed to Kafka."
+      return 0
+    fi
+    sleep 1
+  done
+
+  log_progress "WARNING: data-storage Kafka SUBSCRIBED not seen in logs" >&2
   return 1
 }
 

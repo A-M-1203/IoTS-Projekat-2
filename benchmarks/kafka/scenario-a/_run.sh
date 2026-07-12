@@ -1,12 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLIENTS="${1:?clients required}"
-ACKS="${2:?acks required}"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../common/lib.sh
 source "$SCRIPT_DIR/../../common/lib.sh"
+
+usage() {
+  echo "Usage: $0 <clients> <acks>" >&2
+  echo "  clients: number of producer threads (100, 1000, or 10000)" >&2
+  echo "  acks:    0, 1, or all" >&2
+  echo "" >&2
+  echo "Examples:" >&2
+  echo "  bash $0 100 1" >&2
+  echo "  bash run_100_acks1.sh" >&2
+  exit 1
+}
+
+if [[ $# -lt 2 ]]; then
+  usage
+fi
+
+CLIENTS="$1"
+ACKS="$2"
 
 CONFIG="devices_${CLIENTS}_acks${ACKS}"
 TS="$(timestamp_utc)"
@@ -22,28 +37,30 @@ SENT=$((CLIENTS * MESSAGES_PER_DEVICE))
 log_progress "=== Scenario A Kafka: clients=$CLIENTS acks=$ACKS sent=$SENT ==="
 
 setup_stack kafka 500
+wait_for_storage_kafka_subscribed 30
 
 log_progress "Copying benchmark payload to Kafka container..."
 kafka_copy_payload "$PAYLOAD_FILE"
-kafka_exec /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 \
-  --create --if-not-exists --topic "$KAFKA_TOPIC" \
-  --partitions 1 --replication-factor 1 || true
 
 start_stats_monitor "$RESULT_STATS"
 START_TS=$(date +%s)
 
-log_progress "Publishing $SENT messages via kafka-producer-perf-test (this may take a while)..."
+log_progress "Publishing $SENT messages via kafka-producer-perf-test..."
 BENCH_OUTPUT=$(kafka_producer_perf \
   --topic "$KAFKA_TOPIC" \
   --num-records "$SENT" \
   --throughput -1 \
   --payload-file /tmp/bench_payload.json \
-  --producer-props "acks=${ACKS} bootstrap.servers=localhost:9092" \
+  --producer-props acks="${ACKS}" bootstrap.servers=localhost:9092 \
   --num-threads "$CLIENTS" 2>&1) || true
 
 log_progress "Load generation finished."
 echo "$BENCH_OUTPUT"
+
+METRICS_RECEIVED="$(get_storage_metrics_received)"
+METRICS_STORED="$(get_storage_metrics_stored)"
+METRICS_ERRORS="$(get_storage_metrics_field errors)"
+log_progress "Storage after publish: received=$METRICS_RECEIVED stored=$METRICS_STORED errors=$METRICS_ERRORS"
 
 log_progress "Calculating received count and loss..."
 wait_for_drain 180
